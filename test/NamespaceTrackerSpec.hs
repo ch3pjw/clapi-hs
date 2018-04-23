@@ -294,9 +294,8 @@ spec = do
         errD = FrpErrorDigest $ Map.singleton (PathError helloP) ["lol"]
         forTest = do
             claimHello alice
-            expectRev $ Left $ Map.fromList
-              [ (helloS, alice)
-              ] -- FIXME: should API be owned?
+            -- FIXME: should API be owned?
+            expectRev $ Left $ Map.singleton helloS alice
             expectRev $ Right $ ServerData alice $ Frped errD
             expectRev $ Right $ ServerDisconnect alice
             expectRev $ Left $ Map.fromList
@@ -306,6 +305,13 @@ spec = do
             waitThenFwdOnly $ \m -> lift $ m `shouldBe` (Originator alice, Iprd $ TrprDigest helloS)
             relayNoMore
       in runEffect $ forTest <<-> nstProtocol <<-> fauxRelay
+    it "Clients don't get sent empty bundles" $
+      let
+        forTest = do
+            sendFwd $ ClientData alice $ Trcd $ trcdEmpty
+            claimHello bob
+            expectRev $ Left $ Map.singleton helloS bob
+      in runEffect $ forTest <<-> nstProtocol <<-> blackHoleRelay
   where
     blackHoleRelay = waitThenFwdOnly $ const blackHoleRelay
     relayNoMore = waitThenFwdOnly $ const $ lift $ fail "Relay got extra"

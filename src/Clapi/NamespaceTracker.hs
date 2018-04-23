@@ -64,6 +64,8 @@ nstProtocol_ :: (Monad m, Ord i) => StateT (NstState i) (NstProtocol m i) ()
 nstProtocol_ = forever $ liftedWaitThen fwd rev
   where
     sendFwd' i d = lift $ sendFwd (Originator i, d)
+    sendClientRev i frcd = unless (frcdNull frcd) $ lift $
+        sendRev $ Right $ ServerData i $ Frcd frcd
     fwd (ClientConnect _ _) = return ()
     fwd (ClientData i trd) =
       case trd of
@@ -77,15 +79,14 @@ nstProtocol_ = forever $ liftedWaitThen fwd rev
           (uncurry $ throwOutProvider i)
           (const $ do
               (icd, frcd) <- toInboundClientDigest i d
-              unless (frcdNull frcd) $
-                lift $ sendRev $ Right $ ServerData i $ Frcd frcd
+              sendClientRev i frcd
               sendFwd' i $ Icd icd
           )
           (guardNsClientDigest i d)
     fwd (ClientDisconnect i) = handleDisconnect i
     rev (Originator i, od) = case od of
       Ocid d -> registerSubs i d
-        >> lift (sendRev $ Right $ ServerData i $ Frcd $ subResponse d)
+        >> (sendClientRev i $ subResponse d)
       Ocd d -> unsubDeleted d >>= lift . broadcastClientDigest d
       Opd d -> dispatchProviderDigest d
       Ope d -> (lift $ sendRev $ Right $ ServerData i $ Frped d)
