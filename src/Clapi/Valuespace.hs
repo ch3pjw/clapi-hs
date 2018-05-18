@@ -52,9 +52,9 @@ import Clapi.Types.AssocList
   ( alKeysSet, alValues, alFromMap, alSingleton, alEmpty
   , unsafeMkAssocList, alMapKeys, alFmapWithKey, alToMap)
 import Clapi.Types.Definitions
-  ( Definition(..), Liberty(..), TupleDefinition(..)
-  , StructDefinition(..), defDispatch, childLibertyFor
-  , childTypeFor)
+  ( Definition(..), TreeDefinition(..), Liberty(..), ClientPermission(..)
+  , Mandatoriness(..), TupleDefinition(..) , StructDefinition(..), defDispatch
+  , childLibertyFor, childTypeFor)
 import Clapi.Types.Digests
   ( DefOp(..), isUndef, ContainerOps, DataChange(..), isRemove, DataDigest
   , TrpDigest(..), trpdRemovedPaths)
@@ -67,6 +67,9 @@ import Clapi.Validator (validate, extractTypeAssertion)
 import qualified Clapi.Types.Dkmap as Dkmap
 
 type DefMap = Map Seg (Map Seg Definition)
+type ValDefMap = Map Seg (Map Seg TupleDefinition)
+type TreeDefMap = Map Seg (Map Seg (TreeDefinition ClientPermission))
+type PostDefMap = Map Seg (Map Seg (TreeDefinition Mandatoriness))
 type TypeAssignmentMap = Mos.Dependencies Path TypeName
 type Referer = Path
 type Referee = Path
@@ -75,6 +78,9 @@ type Xrefs = Map Referee (Map Referer (Maybe (Set TpId)))
 data Valuespace = Valuespace
   { vsTree :: RoseTree [WireValue]
   , vsTyDefs :: DefMap
+  , vsValDefs :: ValDefMap
+  , vsTreeDefs :: TreeDefMap
+  , vsPostDefs :: PostDefMap
   , vsTyAssns :: TypeAssignmentMap
   , vsXrefs :: Xrefs
   } deriving (Eq, Show)
@@ -102,9 +108,9 @@ rootTypeName, apiTypeName :: TypeName
 rootTypeName = TypeName apiNs [segq|root|]
 apiTypeName = TypeName apiNs apiNs
 
-apiDef :: StructDefinition
-apiDef = StructDefinition "Information about CLAPI itself" $
-  alSingleton [segq|version|] (TypeName apiNs [segq|version|], Cannot)
+apiDef :: a -> StructDefinition a
+apiDef a = StructDefinition "Information about CLAPI itself" $
+  alSingleton [segq|version|] (TypeName apiNs [segq|version|], a)
 
 versionDef :: TupleDefinition
 versionDef = TupleDefinition "The version of CLAPI" (unsafeMkAssocList
@@ -130,7 +136,8 @@ unsafeValidateVs vs = either (error . show) snd $ validateVs allTainted vs
       vsTree vs
 
 baseValuespace :: Valuespace
-baseValuespace = unsafeValidateVs $ Valuespace baseTree baseDefs baseTas mempty
+baseValuespace = unsafeValidateVs $ Valuespace
+    baseTree baseDefs baseValDefs baseTreeDefs basePostDefs baseTas mempty
   where
     vseg = [segq|version|]
     version = RtConstData Nothing
@@ -138,10 +145,15 @@ baseValuespace = unsafeValidateVs $ Valuespace baseTree baseDefs baseTas mempty
     baseTree =
       treeInsert Nothing (Root :/ apiNs :/ vseg) version Tree.RtEmpty
     baseDefs = Map.singleton apiNs $ Map.fromList
-      [ (apiNs, StructDef apiDef)
+      [ (apiNs, StructDef $ apiDef Cannot)
       , (vseg, TupleDef versionDef)
       , (dnSeg, TupleDef displayNameDef)
       ]
+    baseValDefs = Map.singleton apiNs $ Map.fromList
+      [ (vseg, versionDef), (dnSeg, displayNameDef) ]
+    baseTreeDefs = Map.singleton apiNs $
+        Map.singleton apiNs $ TStructDef $ apiDef ReadOnly
+    basePostDefs = mempty
     baseTas = Mos.dependenciesFromMap $ Map.singleton Root rootTypeName
 
 lookupDef :: MonadFail m => TypeName -> DefMap -> m Definition
@@ -160,7 +172,7 @@ lookupTypeName :: MonadFail m => Path -> TypeAssignmentMap -> m TypeName
 lookupTypeName p = note "Type name not found" . Mos.getDependency p
 
 defForPath :: MonadFail m => Path -> Valuespace -> m Definition
-defForPath p (Valuespace _ defs tas _) =
+defForPath p (Valuespace _ defs valDefs treeDefs postDefs tas _) =
   lookupTypeName p tas >>= flip lookupDef defs
 
 getLiberty :: MonadFail m => Path -> Valuespace -> m Liberty
@@ -172,7 +184,7 @@ getLiberty path vs = case path of
 valuespaceGet
   :: MonadFail m => Path -> Valuespace
   -> m (Definition, TypeName, Liberty, RoseTreeNode [WireValue])
-valuespaceGet p vs@(Valuespace tree defs tas _) = do
+valuespaceGet p vs@(Valuespace tree defs valDefs treeDefs postDefs tas _) = do
     rtn <- note "Path not found" $ Tree.treeLookupNode p tree
     tn <- lookupTypeName p tas
     def <- lookupDef tn defs
@@ -270,7 +282,7 @@ validateVs t v = do
       -> Map Path (Maybe (Set TpId)) -> Valuespace
       -> Either (Map (ErrorIndex TypeName) [ValidationErr])
            (Map Path TypeName, TypeClaimsByPath, Valuespace)
-    inner newTas newRefClaims tainted vs@(Valuespace tree _ oldTyAssns _) =
+    inner newTas newRefClaims tainted vs@(Valuespace tree _ _ _ _ oldTyAssns _) =
       case Map.toAscList tainted of
         [] -> return (newTas, newRefClaims, vs)
         ((path, invalidatedTps):_) ->
@@ -356,21 +368,24 @@ processToRelayProviderDigest trpd vs =
     tpRemovals (TimeChange m) = Map.keysSet $ Map.filter (isRemove . snd) m
     xrefs' = Map.foldlWithKey' (\x r ts -> removeXrefsTps r ts x) (vsXrefs vs) $
       fmap tpRemovals $ alToMap qData
-    (undefOps, defOps) = Map.partition isUndef (trpdDefinitions trpd)
-    defs' =
-      let
+    applyDefOps ops = Map.alter updateNsDefs ns
+      where
+        (undefOps, defOps) = Map.partition isUndef ops
         newDefs = odDef <$> defOps
         updateNsDefs Nothing = Just newDefs
         updateNsDefs (Just existingDefs) = Just $ Map.union newDefs $
           Map.withoutKeys existingDefs (Map.keysSet undefOps)
-      in
-        Map.alter updateNsDefs ns (vsTyDefs vs)
+    defs' = applyDefOps (trpdDefinitions trpd) (vsTyDefs vs)
+    -- FIXME: Doesn't do anything because there aren't val/tree/post defs in digest
+    valDefs' = applyDefOps (trpdValueDefs trpd) $ vsValDefs vs
+    treeDefs' = vsTreeDefs vs
+    postDefs' = vsPostDefs vs
     (updateErrs, tree') = Tree.updateTreeWithDigest qCops qData (vsTree vs)
   in do
     unless (null updateErrs) $ Left $ Map.mapKeys PathError updateErrs
     (updatedTypes, vs') <- first (fmap $ fmap $ Text.pack . show) $ validateVs
       (Map.fromSet (const Nothing) redefdPaths <> updatedPaths) $
-      Valuespace tree' defs' tas xrefs'
+      Valuespace tree' defs' valDefs' treeDefs' postDefs' tas xrefs'
     return (updatedTypes, vs')
 
 validatePath :: Valuespace -> Path -> Maybe (Set TpId) -> Either [ValidationErr] (Either RefTypeClaims (Map TpId RefTypeClaims))
@@ -487,13 +502,16 @@ validateWireValues tts wvs =
 
 -- FIXME: The VS you get back from this can be invalid WRT refs/inter NS types
 vsRelinquish :: Seg -> Valuespace -> Valuespace
-vsRelinquish ns (Valuespace tree defs tas xrefs) =
+vsRelinquish ns (Valuespace tree defs valDefs treeDefs postDefs tas xrefs) =
   let
     nsp = Root :/ ns
   in
     Valuespace
       (Tree.treeDelete nsp tree)
       (Map.delete ns defs)
+      (Map.delete ns valDefs)
+      (Map.delete ns treeDefs)
+      (Map.delete ns postDefs)
       (Mos.filterDeps
        (\p (TypeName ns' _) -> not $ p `Path.isChildOf` nsp || ns == ns') tas)
       (filterXrefs (\p -> not (p `Path.isChildOf` nsp)) xrefs)

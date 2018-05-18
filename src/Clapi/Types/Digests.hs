@@ -16,16 +16,16 @@ import Data.Word (Word32)
 import Clapi.Types.AssocList
   (AssocList, alNull, alEmpty, alFromList, alFmapWithKey, alValues, alKeysSet)
 import Clapi.Types.Base (Attributee, Time, Interpolation)
-import Clapi.Types.Definitions (Definition, Liberty)
+import Clapi.Types.Definitions (Definition, Liberty, TupleDefinition)
 import Clapi.Types.Messages
 import Clapi.Types.Path (Seg, Path, TypeName(..), pattern (:</), pattern (:/))
 import Clapi.Types.SequenceOps (SequenceOp(..), isSoAbsent)
 import Clapi.Types.Wire (WireValue)
 
 data SubOp = OpSubscribe | OpUnsubscribe deriving (Show, Eq)
-data DefOp = OpDefine {odDef :: Definition} | OpUndefine deriving (Show, Eq)
+data DefOp d = OpDefine {odDef :: d} | OpUndefine deriving (Show, Eq)
 
-isUndef :: DefOp -> Bool
+isUndef :: DefOp d -> Bool
 isUndef OpUndefine = True
 isUndef _ = False
 
@@ -46,23 +46,25 @@ type ContainerOps = Map Path (Map Seg (Maybe Attributee, SequenceOp Seg))
 
 data TrpDigest = TrpDigest
   { trpdNamespace :: Seg
-  , trpdDefinitions :: Map Seg DefOp
+  , trpdDefinitions :: Map Seg (DefOp Definition)
+  , trpdValueDefs :: Map Seg (DefOp TupleDefinition)
   , trpdData :: DataDigest
   , trpdContainerOps :: ContainerOps
   , trpdErrors :: Map (ErrorIndex Seg) [Text]
   } deriving (Show, Eq)
 
 trpDigest :: Seg -> TrpDigest
-trpDigest ns = TrpDigest ns mempty alEmpty mempty mempty
+trpDigest ns = TrpDigest ns mempty mempty alEmpty mempty mempty
 
 trpdRemovedPaths :: TrpDigest -> [Path]
-trpdRemovedPaths (TrpDigest ns _ _ cOps _) = (ns :</) <$> Map.foldlWithKey f [] cOps
+trpdRemovedPaths (TrpDigest ns _ _ _ cOps _) = (ns :</) <$> Map.foldlWithKey f [] cOps
   where
     f acc p segMap = acc ++
       (fmap (p :/) $ Map.keys $ Map.filter isSoAbsent $ fmap snd segMap)
 
 trpdNull :: TrpDigest -> Bool
-trpdNull (TrpDigest _ns defs dd cops errs) = null defs && alNull dd && null cops && null errs
+trpdNull (TrpDigest _ns defs valDefs dd cops errs) =
+    null defs && null valDefs && alNull dd && null cops && null errs
 
 data FrpDigest = FrpDigest
   { frpdNamespace :: Seg
@@ -87,7 +89,7 @@ trcdEmpty = TrcDigest mempty mempty alEmpty mempty
 data FrcDigest = FrcDigest
   { frcdTypeUnsubs :: Set TypeName
   , frcdDataUnsubs :: Set Path
-  , frcdDefinitions :: Map TypeName DefOp
+  , frcdDefinitions :: Map TypeName (DefOp Definition)
   , frcdTypeAssignments :: Map Path (TypeName, Liberty)
   , frcdData :: DataDigest
   , frcdContainerOps :: ContainerOps
@@ -170,19 +172,19 @@ produceContOpMessages = mconcat . Map.elems . Map.mapWithKey
       SoAbsent -> MsgAbsent p targ att
 
 
-qualifyDefMessage :: Seg -> DefMessage Seg -> DefMessage TypeName
+qualifyDefMessage :: Seg -> DefMessage Seg d -> DefMessage TypeName d
 qualifyDefMessage ns dm = case dm of
   MsgDefine s d -> MsgDefine (TypeName ns s) d
   MsgUndefine s -> MsgUndefine $ TypeName ns s
 
-digestDefMessages :: Ord a => [DefMessage a] -> Map a DefOp
+digestDefMessages :: Ord a => [DefMessage a d] -> Map a (DefOp d)
 digestDefMessages = Map.fromList . fmap procMsg
   where
     procMsg msg = case msg of
       MsgDefine a def -> (a, OpDefine def)
       MsgUndefine a -> (a, OpUndefine)
 
-produceDefMessages :: Map a DefOp -> [DefMessage a]
+produceDefMessages :: Map a (DefOp d) -> [DefMessage a d]
 produceDefMessages = Map.elems . Map.mapWithKey
   (\a op -> case op of
      OpDefine def -> MsgDefine a def
@@ -235,9 +237,10 @@ digestToRelayBundle trb = case trb of
     Trcb b -> Trcd $ digestToRelayClientBundle b
   where
     digestToRelayProviderBundle :: ToRelayProviderBundle -> TrpDigest
-    digestToRelayProviderBundle (ToRelayProviderBundle ns errs defs dat cont) =
+    digestToRelayProviderBundle (ToRelayProviderBundle ns errs defs valDefs dat cont) =
       TrpDigest ns
         (digestDefMessages defs)
+        (digestDefMessages valDefs)
         (digestDataUpdateMessages dat)
         (digestContOpMessages cont)
         (digestErrMessages errs)
@@ -261,9 +264,9 @@ produceToRelayBundle trd = case trd of
     Trprd d -> Trpr $ produceToRelayProviderRelinquish d
     Trcd d -> Trcb $ produceToRelayClientBundle d
   where
-    produceToRelayProviderBundle (TrpDigest ns defs dat cops errs) =
+    produceToRelayProviderBundle (TrpDigest ns defs valueDefs dat cops errs) =
       ToRelayProviderBundle
-        ns (produceErrMessages errs) (produceDefMessages defs)
+        ns (produceErrMessages errs) (produceDefMessages defs) (produceDefMessages valueDefs)
         (produceDataUpdateMessages dat) (produceContOpMessages cops)
 
     produceToRelayProviderRelinquish (TrprDigest ns) =
@@ -355,7 +358,7 @@ data InboundDigest
 
 data OutboundClientDigest = OutboundClientDigest
   { ocdContainerOps :: ContainerOps
-  , ocdDefinitions :: Map TypeName DefOp
+  , ocdDefinitions :: Map TypeName (DefOp Definition)
   , ocdTypeAssignments :: Map Path (TypeName, Liberty)
   , ocdData :: DataDigest
   , ocdErrors :: Map (ErrorIndex TypeName) [Text]

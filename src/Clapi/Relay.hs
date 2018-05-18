@@ -139,7 +139,7 @@ relay vs = waitThenFwdOnly fwd
           relay vs'
       where
         handleOwnerSuccess
-            (TrpDigest ns defs dd contOps errs) (updatedTyAssns, vs') =
+            (TrpDigest ns defs valDefs dd contOps errs) (updatedTyAssns, vs') =
           let
             shouldPubRoot =
               Map.member ns defs &&
@@ -201,7 +201,7 @@ relay vs = waitThenFwdOnly fwd
           relay vs
 
 -- FIXME: Worst case implementation
-vsMinimiseDefinitions :: Map TypeName DefOp -> Valuespace -> Map TypeName DefOp
+vsMinimiseDefinitions :: Map TypeName (DefOp d) -> Valuespace -> Map TypeName (DefOp d)
 vsMinimiseDefinitions defs _ = defs
 
 -- FIXME: Worst case implementation

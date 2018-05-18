@@ -60,7 +60,7 @@ instance Encodable a => Encodable (MsgError a) where
 
 data DefMsgType = DefMsgTDef | DefMsgTUndef deriving (Enum, Bounded)
 
-defMsgTaggedData :: TaggedData DefMsgType (DefMessage a)
+defMsgTaggedData :: TaggedData DefMsgType (DefMessage a d)
 defMsgTaggedData = taggedData typeToTag msgToType
   where
     typeToTag ty = case ty of
@@ -70,7 +70,7 @@ defMsgTaggedData = taggedData typeToTag msgToType
       MsgDefine _ _ -> DefMsgTDef
       MsgUndefine _ -> DefMsgTUndef
 
-instance Encodable a => Encodable (DefMessage a) where
+instance (Encodable a, Encodable d) => Encodable (DefMessage a d) where
     builder = tdTaggedBuilder defMsgTaggedData $ \msg -> case msg of
       MsgDefine tn def -> builder tn <<>> builder def
       MsgUndefine tn -> builder tn
@@ -195,16 +195,16 @@ trBundleTaggedData = taggedData typeToTag bundleToType
 
 instance Encodable ToRelayBundle where
     builder = tdTaggedBuilder trBundleTaggedData $ \bund -> case bund of
-      Trpb (ToRelayProviderBundle ns errs defs dat contMsgs) ->
-        builder ns <<>> builder errs <<>> builder defs <<>> builder dat
-        <<>> builder contMsgs
+      Trpb (ToRelayProviderBundle ns errs defs valDefs dat contMsgs) ->
+        builder ns <<>> builder errs <<>> builder defs <<>> builder valDefs
+        <<>> builder dat <<>> builder contMsgs
       Trpr (ToRelayProviderRelinquish ns) -> builder ns
       Trcb (ToRelayClientBundle subs dat contMsgs) ->
         builder subs <<>> builder dat <<>> builder contMsgs
     parser = tdTaggedParser trBundleTaggedData $ \ty -> case ty of
       TrbtProvider -> Trpb <$>
         (ToRelayProviderBundle <$> parser <*> parser <*> parser <*> parser
-        <*> parser)
+        <*> parser <*> parser)
       TrbtProviderRelinquish -> Trpr . ToRelayProviderRelinquish <$> parser
       TrbtClient -> Trcb <$>
         (ToRelayClientBundle <$> parser <*> parser <*> parser)

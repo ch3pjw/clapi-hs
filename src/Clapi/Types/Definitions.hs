@@ -1,6 +1,10 @@
 {-# OPTIONS_GHC -Wall -Wno-orphans #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE
+   TypeApplications
+ , Rank2Types
+ , FlexibleInstances
+#-}
+-- FIXME: Remove FlexibleInstances once definition reshuffle complete
 
 module Clapi.Types.Definitions where
 
@@ -22,6 +26,8 @@ import Clapi.Types.Wire (WireValue(..), (<|$|>), (<|*|>))
 import Clapi.Util (strictZip, fmtStrictZipError, safeToEnum)
 
 data Liberty = Cannot | May | Must deriving (Show, Eq, Enum, Bounded)
+data ClientPermission = ReadOnly | Editable deriving (Show, Eq, Enum, Bounded)
+data Mandatoriness = Mandatory | Optional deriving (Show, Eq, Enum, Bounded)
 
 data MetaType = Tuple | Struct | Array deriving (Show, Eq, Enum, Bounded)
 
@@ -67,12 +73,12 @@ instance OfMetaType TupleDefinition where
   childTypeFor _ _ = Nothing
   childLibertyFor _ _ = fail "Tuples have no children"
 
-data StructDefinition = StructDefinition
+data StructDefinition a = StructDefinition
   { strDefDoc :: Text
-  , strDefTypes :: AssocList Seg (TypeName, Liberty)
+  , strDefTypes :: AssocList Seg (TypeName, a)
   } deriving (Show, Eq)
 
-instance OfMetaType StructDefinition where
+instance OfMetaType (StructDefinition Liberty) where
   metaType _ = Struct
   toWireValues (StructDefinition d tys) =
     let
@@ -90,7 +96,7 @@ instance OfMetaType StructDefinition where
     where
       mkDef
         :: MonadFail m => Text -> [Text] -> [Text] -> [Word8]
-        -> m StructDefinition
+        -> m (StructDefinition Liberty)
       mkDef d ns tns ls = do
         names <- mapM mkSeg ns
         typeNames <- mapM typeNameFromText tns
@@ -105,13 +111,13 @@ instance OfMetaType StructDefinition where
   childLibertyFor (StructDefinition _ tyInfo) seg = note "No such child" $
     snd <$> lookup seg (unAssocList tyInfo)
 
-data ArrayDefinition = ArrayDefinition
+data ArrayDefinition a = ArrayDefinition
   { arrDefDoc :: Text
   , arrDefChildType :: TypeName
-  , arrDefChildLiberty :: Liberty
+  , arrDefChildLiberty :: a
   } deriving (Show, Eq)
 
-instance OfMetaType ArrayDefinition where
+instance OfMetaType (ArrayDefinition Liberty) where
   metaType _ = Array
   toWireValues (ArrayDefinition d ct cl) =
     [ WireValue d
@@ -122,7 +128,7 @@ instance OfMetaType ArrayDefinition where
   fromWireValues [doc, ty, liberty] =
       join $ mkDef <|$|> doc <|*|> ty <|*|> liberty
     where
-      mkDef :: MonadFail m => Text -> Text -> Word8 -> m ArrayDefinition
+      mkDef :: MonadFail m => Text -> Text -> Word8 -> m (ArrayDefinition Liberty)
       mkDef d tn l = ArrayDefinition d
         <$> typeNameFromText tn <*> safeToEnum (fromIntegral l)
   fromWireValues _ = fail "Wrong number of arguments for array def"
@@ -130,11 +136,15 @@ instance OfMetaType ArrayDefinition where
   childTypeFor _ (ArrayDefinition _ tp _) = Just tp
   childLibertyFor (ArrayDefinition _ _ l) _ = return l
 
+data TreeDefinition a
+  = TStructDef (StructDefinition a)
+  | TArrayDef (ArrayDefinition a)
+  deriving (Show, Eq)
 
 data Definition
   = TupleDef TupleDefinition
-  | StructDef StructDefinition
-  | ArrayDef ArrayDefinition
+  | StructDef (StructDefinition Liberty)
+  | ArrayDef (ArrayDefinition Liberty)
   deriving (Show, Eq)
 
 tupleDef :: Text -> AssocList Seg TreeType -> InterpolationLimit -> Definition

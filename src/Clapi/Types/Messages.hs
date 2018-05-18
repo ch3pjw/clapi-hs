@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Word (Word32)
 
 import Clapi.Types.Base (Attributee, Time, Interpolation)
-import Clapi.Types.Definitions (Definition, Liberty)
+import Clapi.Types.Definitions (Definition, TupleDefinition, Liberty)
 import Clapi.Types.Path (Seg, Path, TypeName(..), pattern (:</))
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Wire (WireValue)
@@ -39,8 +39,8 @@ namespaceErrIdx ns ei = case ei of
 data MsgError a
   = MsgError {errIndex :: ErrorIndex a, errMsgTxt :: Text} deriving (Eq, Show)
 
-data DefMessage a
-  = MsgDefine a Definition
+data DefMessage a d
+  = MsgDefine a d
   | MsgUndefine a
   deriving (Show, Eq)
 
@@ -91,7 +91,8 @@ data ContainerUpdateMessage
 data ToRelayProviderBundle = ToRelayProviderBundle
   { trpbNamespace :: Seg
   , trpbErrors :: [MsgError Seg]
-  , trpbDefinitions :: [DefMessage Seg]
+  , trpbDefinitions :: [DefMessage Seg Definition]
+  , trpbValueDefs :: [DefMessage Seg TupleDefinition]
   , trpbData :: [DataUpdateMessage]
   , trpbContMsgs :: [ContainerUpdateMessage]
   } deriving (Show, Eq)
@@ -119,7 +120,7 @@ data FromRelayClientBundle = FromRelayClientBundle
   { frcbTypeUnsubs :: [TypeName]
   , frcbDataUnsubs :: [Path]
   , frcbErrors :: [MsgError TypeName]
-  , frcbDefinitions :: [DefMessage TypeName]
+  , frcbDefinitions :: [DefMessage TypeName Definition]
   , frcbTypeAssignments :: [TypeMessage]
   , frcbData :: [DataUpdateMessage]
   , frcbContMsgs :: [ContainerUpdateMessage]
