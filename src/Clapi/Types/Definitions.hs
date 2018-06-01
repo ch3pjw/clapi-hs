@@ -57,14 +57,15 @@ instance OfMetaType StructDefinition where
 
 data ArrayDefinition = ArrayDefinition
   { arrDefDoc :: Text
+  , arrDefPostType :: Maybe (Tagged PostDefinition TypeName)
   , arrDefChildType :: Tagged Definition TypeName
   , arrDefChildLiberty :: Liberty
   } deriving (Show, Eq)
 
 instance OfMetaType ArrayDefinition where
   metaType _ = Array
-  childTypeFor _ (ArrayDefinition _ tp _) = Just tp
-  childLibertyFor (ArrayDefinition _ _ l) _ = return l
+  childTypeFor _ (ArrayDefinition _ _ tp _) = Just tp
+  childLibertyFor (ArrayDefinition _ _ _ l) _ = return l
 
 
 data Definition
@@ -80,8 +81,10 @@ structDef
   :: Text -> AssocList Seg (Tagged Definition TypeName, Liberty) -> Definition
 structDef doc types = StructDef $ StructDefinition doc types
 
-arrayDef :: Text -> Tagged Definition TypeName -> Liberty -> Definition
-arrayDef doc tn lib = ArrayDef $ ArrayDefinition doc tn lib
+arrayDef
+  :: Text -> Maybe (Tagged PostDefinition TypeName)
+  -> Tagged Definition TypeName -> Liberty -> Definition
+arrayDef doc ptn tn lib = ArrayDef $ ArrayDefinition doc ptn tn lib
 
 defDispatch :: (forall a. OfMetaType a => a -> r) -> Definition -> r
 defDispatch f (TupleDef d) = f d

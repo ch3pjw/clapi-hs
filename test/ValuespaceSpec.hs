@@ -121,7 +121,7 @@ emptyArrayD s vs = TrpDigest
     mempty
     mempty
   where
-    vaDef = arrayDef "for test" (tTypeName apiNs [segq|version|]) May
+    vaDef = arrayDef "for test" Nothing (tTypeName apiNs [segq|version|]) May
     -- FIXME: is vs always baseValuespace?
     rootDef = redefApiRoot (alInsert s $ tTypeName apiNs s) vs
 
@@ -262,7 +262,8 @@ spec = do
     it "Relinquish" $
       let
         fs = [segq|foo|]
-        fooRootDef = arrayDef "frd" (tTypeName apiNs [segq|version|]) Cannot
+        fooRootDef = arrayDef "frd" Nothing (tTypeName apiNs [segq|version|])
+          Cannot
         claimFoo = TrpDigest
           (Namespace fs)
           mempty

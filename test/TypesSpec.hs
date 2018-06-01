@@ -165,11 +165,13 @@ instance Arbitrary Definition where
       do
         oneof
           [ TupleDef <$>
-              (TupleDefinition <$> arbitraryTextNoNull <*> arbitrary <*> arbitrary)
+              (TupleDefinition <$> arbitraryTextNoNull <*> arbitrary
+               <*> arbitrary)
           , StructDef <$>
               (StructDefinition <$> arbitraryTextNoNull <*> arbitrary)
           , ArrayDef <$>
-              (ArrayDefinition <$> arbitraryTextNoNull <*> arbitrary <*> arbitrary)
+              (ArrayDefinition <$> arbitraryTextNoNull <*> arbitrary
+               <*> arbitrary <*> arbitrary)
           ]
 
 instance (Ord a, Random a, Arbitrary a) => Arbitrary (Bounds a) where

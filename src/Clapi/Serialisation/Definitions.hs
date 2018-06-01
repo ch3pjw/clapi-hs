@@ -52,9 +52,9 @@ instance Encodable StructDefinition where
   parser = StructDefinition <$> parser <*> parser
 
 instance Encodable ArrayDefinition where
-  builder (ArrayDefinition doc ct cl) =
-    builder doc <<>> builder ct <<>> builder cl
-  parser = ArrayDefinition <$> parser <*> parser <*> parser
+  builder (ArrayDefinition doc pt ct cl) =
+    builder doc <<>> builder pt <<>> builder ct <<>> builder cl
+  parser = ArrayDefinition <$> parser <*> parser <*> parser <*> parser
 
 defTaggedData :: TaggedData MetaType Definition
 defTaggedData = taggedData typeToTag (defDispatch metaType)

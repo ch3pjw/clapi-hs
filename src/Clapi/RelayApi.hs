@@ -62,6 +62,7 @@ relayApiProto selfAddr =
              , (clock_diff, (tTypeName rns clock_diff, Cannot))
              ])
         , ([segq|clients|], arrayDef "Info about the connected clients"
+             Nothing
              (tTypeName rns [segq|client_info|]) Cannot)
         , ([segq|owner_info|], tupleDef "owner info"
              (alSingleton [segq|owner|]
@@ -69,6 +70,7 @@ relayApiProto selfAddr =
                $ TtRef $ TypeName rns [segq|client_info|])
              ILUninterpolated)
         , ([segq|owners|], arrayDef "ownersdoc"
+             Nothing
              (tTypeName rns [segq|owner_info|]) Cannot)
         , ([segq|self|], tupleDef "Which client you are"
              (alSingleton [segq|info|]

@@ -100,7 +100,8 @@ spec = describe "the relay protocol" $ do
       let
         kid = [segq|kid|]
         tyDefs = Map.fromList
-          [ (Tagged foo, arrayDef "arr" (tTypeName (Namespace foo) kid) Cannot)
+          [ ( Tagged foo
+            , arrayDef "arr" Nothing (tTypeName (Namespace foo) kid) Cannot)
           , (Tagged kid, tupleDef "kid" alEmpty ILUninterpolated)
           ]
         vsWithStuff = unsafeValidateVs $ baseValuespace
