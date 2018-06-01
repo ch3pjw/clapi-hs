@@ -44,8 +44,7 @@ type DataDigest = AssocList Path DataChange
 
 type ContainerOps = Map Path (Map Seg (Maybe Attributee, SequenceOp Seg))
 
-data PostOp
-  = OpPost {opPath :: Path, opArgs :: Map Seg WireValue} deriving (Show, Eq)
+newtype PostOp = OpPost {opArgs :: Map Seg WireValue} deriving (Show, Eq)
 
 data TrpDigest = TrpDigest
   { trpdNamespace :: Namespace
@@ -73,8 +72,7 @@ trpdNull (TrpDigest _ns postDefs defs dd cops errs) =
 
 data FrpDigest = FrpDigest
   { frpdNamespace :: Namespace
-  -- FIXME: this is tosh! It should possibly remain [PostMessage]
-  , frpdPosts :: Map Seg PostOp
+  , frpdPosts :: Map (Path, Seg) PostOp
   , frpdData :: DataDigest
   , frpdContainerOps :: ContainerOps
   } deriving (Show, Eq)
@@ -90,8 +88,7 @@ data TrcDigest = TrcDigest
   { trcdPostTypeSubs :: Map (Tagged PostDefinition TypeName) SubOp
   , trcdTypeSubs :: Map (Tagged Definition TypeName) SubOp
   , trcdDataSubs :: Map Path SubOp
-  -- FIXME: this is tosh! It should possibly remain [PostMessage]
-  , trcdPosts :: Map Seg PostOp
+  , trcdPosts :: Map (Path, Seg) PostOp
   , trcdData :: DataDigest
   , trcdContainerOps :: ContainerOps
   } deriving (Show, Eq)
@@ -136,7 +133,7 @@ trcdNamespaces (TrcDigest pts ts ds posts dd co) =
     (Set.map tTnNamespace $ Map.keysSet pts)
     <> (Set.map tTnNamespace $ Map.keysSet ts)
     <> pathKeyNss (Map.keysSet ds)
-    <> pathKeyNss (Set.fromList $ Map.elems $ opPath <$> posts)
+    <> pathKeyNss (Set.map fst $ Map.keysSet $ posts)
     <> pathKeyNss (alKeysSet dd) <> pathKeyNss (Map.keysSet co)
   where
     pathKeyNss = onlyJusts . Set.map pNs
@@ -265,15 +262,15 @@ produceErrMessages :: Map (ErrorIndex a) [Text] -> [MsgError a]
 produceErrMessages =
   mconcat . Map.elems . Map.mapWithKey (\ei errs -> MsgError ei <$> errs)
 
-digestPostMessages :: [PostMessage] -> Map Seg PostOp
+digestPostMessages :: [PostMessage] -> Map (Path, Seg) PostOp
 digestPostMessages = Map.fromList . fmap pmToPo
   where
-    pmToPo (MsgPost path ph args) = (ph, OpPost path args)
+    pmToPo (MsgPost path s args) = ((path, s), OpPost args)
 
-producePostMessages :: Map Seg PostOp -> [PostMessage]
+producePostMessages :: Map (Path, Seg) PostOp -> [PostMessage]
 producePostMessages = fmap (uncurry poToPm) . Map.toList
   where
-    poToPm ph (OpPost path args) = MsgPost path ph args
+    poToPm (p, s) (OpPost args) = MsgPost p s args
 
 digestToRelayBundle :: ToRelayBundle -> TrDigest
 digestToRelayBundle trb = case trb of
