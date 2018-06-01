@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Word (Word32)
 
 import Clapi.Types.Base (Attributee, Time, Interpolation)
-import Clapi.Types.Definitions (Definition, Liberty, PostDefinition)
+import Clapi.Types.Definitions (Definition, Editable, PostDefinition)
 import Clapi.Types.Path
   (Seg, Path, TypeName(..), qualify, unqualify, pattern (:</), Namespace(..))
 import qualified Clapi.Types.Path as Path
@@ -62,7 +62,7 @@ data SubMessage
   deriving (Eq, Show)
 
 data TypeMessage
-  = MsgAssignType Path (Tagged Definition TypeName) Liberty
+  = MsgAssignType Path (Tagged Definition TypeName) Editable
   deriving (Show, Eq)
 
 data PostMessage

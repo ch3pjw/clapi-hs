@@ -14,7 +14,7 @@ import Data.Word (Word32)
 import Clapi.Types.AssocList
   (AssocList, alNull, alEmpty, alFromList, alFmapWithKey, alValues, alKeysSet)
 import Clapi.Types.Base (Attributee, Time, Interpolation)
-import Clapi.Types.Definitions (Definition, Liberty, PostDefinition)
+import Clapi.Types.Definitions (Definition, Editable, PostDefinition)
 import Clapi.Types.Messages
 import Clapi.Types.Path
   ( Seg, Path, TypeName(..), tTnNamespace, pattern (:</), pattern (:/)
@@ -105,7 +105,7 @@ data FrcDigest = FrcDigest
   , frcdDataUnsubs :: Set Path
   , frcdPostDefs :: Map (Tagged PostDefinition TypeName) (DefOp PostDefinition)
   , frcdDefinitions :: Map (Tagged Definition TypeName) (DefOp Definition)
-  , frcdTypeAssignments :: Map Path (Tagged Definition TypeName, Liberty)
+  , frcdTypeAssignments :: Map Path (Tagged Definition TypeName, Editable)
   , frcdData :: DataDigest
   , frcdContainerOps :: ContainerOps
   , frcdErrors :: Map (ErrorIndex TypeName) [Text]
@@ -246,13 +246,13 @@ produceSubMessages pTySubs tySubs datSubs =
 
 
 digestTypeMessages
-  :: [TypeMessage] -> Map Path (Tagged Definition TypeName, Liberty)
+  :: [TypeMessage] -> Map Path (Tagged Definition TypeName, Editable)
 digestTypeMessages = Map.fromList . fmap procMsg
   where
     procMsg (MsgAssignType p tn lib) = (p, (tn, lib))
 
 produceTypeMessages
-  :: Map Path (Tagged Definition TypeName, Liberty) -> [TypeMessage]
+  :: Map Path (Tagged Definition TypeName, Editable) -> [TypeMessage]
 produceTypeMessages = Map.elems . Map.mapWithKey
   (\p (tn, l) -> MsgAssignType p tn l)
 
@@ -420,7 +420,7 @@ data OutboundClientDigest = OutboundClientDigest
   { ocdContainerOps :: ContainerOps
   , ocdPostDefs :: Map (Tagged PostDefinition TypeName) (DefOp PostDefinition)
   , ocdDefinitions :: Map (Tagged Definition TypeName) (DefOp Definition)
-  , ocdTypeAssignments :: Map Path (Tagged Definition TypeName, Liberty)
+  , ocdTypeAssignments :: Map Path (Tagged Definition TypeName, Editable)
   , ocdData :: DataDigest
   , ocdErrors :: Map (ErrorIndex TypeName) [Text]
   } deriving (Show, Eq)

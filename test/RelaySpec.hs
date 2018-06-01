@@ -16,7 +16,7 @@ import Clapi.Tree (treeInsert, RoseTree(RtConstData, RtContainer))
 import Clapi.Types.AssocList (alEmpty, alSingleton, alFromList, alMapKeys)
 import Clapi.Types.Base (InterpolationLimit(..))
 import Clapi.Types.Definitions
-  (arrayDef, structDef, tupleDef, Liberty(..))
+  (arrayDef, structDef, tupleDef, Editable(..))
 import Clapi.Types.Digests
   ( DefOp(..), DataChange(..), TrpDigest(..), trpDigest
   , InboundDigest(..), InboundClientDigest(..), OutboundDigest(..)
@@ -43,8 +43,8 @@ spec = describe "the relay protocol" $ do
           , trpdData = dd
           }
         extendedRootDef = structDef "root def doc" $ alFromList
-          [ (unNamespace apiNs, (tTypeName apiNs (unNamespace apiNs), Cannot))
-          , (foo, (tTypeName (Namespace foo) foo, Cannot))
+          [ (unNamespace apiNs, (tTypeName apiNs (unNamespace apiNs), ReadOnly))
+          , (foo, (tTypeName (Namespace foo) foo, ReadOnly))
           ]
         expectedOutDig = Ocd $ outboundClientDigest
           { ocdData = qualify foo dd
@@ -53,7 +53,7 @@ spec = describe "the relay protocol" $ do
             , (tTypeName apiNs [segq|root|], OpDefine extendedRootDef)
             ]
           , ocdTypeAssignments = Map.insert
-            [pathq|/foo|] (tTypeName (Namespace foo) foo, Cannot) mempty
+            [pathq|/foo|] (tTypeName (Namespace foo) foo, ReadOnly) mempty
           , ocdContainerOps = Map.singleton Root $
               Map.singleton foo
               (Nothing, SoPresentAfter (Just $ unNamespace apiNs))
@@ -101,7 +101,7 @@ spec = describe "the relay protocol" $ do
         kid = [segq|kid|]
         tyDefs = Map.fromList
           [ ( Tagged foo
-            , arrayDef "arr" Nothing (tTypeName (Namespace foo) kid) Cannot)
+            , arrayDef "arr" Nothing (tTypeName (Namespace foo) kid) ReadOnly)
           , (Tagged kid, tupleDef "kid" alEmpty ILUninterpolated)
           ]
         vsWithStuff = unsafeValidateVs $ baseValuespace
@@ -117,7 +117,7 @@ spec = describe "the relay protocol" $ do
         expectedOutDig = Ocd $ outboundClientDigest
           { ocdData = qualify foo dd
           , ocdTypeAssignments = Map.singleton qKid
-              (tTypeName (Namespace foo) kid, Cannot)
+              (tTypeName (Namespace foo) kid, ReadOnly)
           , ocdContainerOps = Map.singleton fooP $
             Map.singleton kid (Nothing, SoPresentAfter Nothing)
           }

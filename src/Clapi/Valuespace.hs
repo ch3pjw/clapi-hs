@@ -3,7 +3,7 @@
 module Clapi.Valuespace
   ( Valuespace, vsTree, vsTyDefs, vsPostDefs
   , baseValuespace
-  , vsLookupPostDef, vsLookupDef, valuespaceGet, getLiberty
+  , vsLookupPostDef, vsLookupDef, valuespaceGet, getEditable
   , apiNs, rootTypeName, apiTypeName, dnSeg
   , processToRelayProviderDigest, processToRelayClientDigest
   , validateVs, unsafeValidateVs
@@ -46,8 +46,8 @@ import Clapi.Types.AssocList
   ( alKeysSet, alValues, alFromMap, alSingleton, alEmpty
   , unsafeMkAssocList, alMapKeys, alFmapWithKey, alToMap)
 import Clapi.Types.Definitions
-  ( Definition(..), Liberty(..), TupleDefinition(..)
-  , StructDefinition(..), PostDefinition(..), defDispatch, childLibertyFor
+  ( Definition(..), Editable(..), TupleDefinition(..)
+  , StructDefinition(..), PostDefinition(..), defDispatch, childEditable
   , childTypeFor)
 import Clapi.Types.Digests
   ( DefOp(..), isUndef, ContainerOps, DataChange(..), isRemove, DataDigest
@@ -100,7 +100,8 @@ apiTypeName = Tagged $ TypeName apiNs $ unNamespace apiNs
 
 apiDef :: StructDefinition
 apiDef = StructDefinition "Information about CLAPI itself" $
-  alSingleton [segq|version|] (Tagged $ TypeName apiNs [segq|version|], Cannot)
+  alSingleton [segq|version|]
+  (Tagged $ TypeName apiNs [segq|version|], ReadOnly)
 
 versionDef :: TupleDefinition
 versionDef = TupleDefinition "The version of CLAPI" (unsafeMkAssocList
@@ -163,7 +164,7 @@ lookupDef tn defs = note "Missing def" $
     (ns, s) = unqualify tn
     -- NB: We generate the root def on the fly when people ask about it
     rootDef = StructDef $ StructDefinition "root def doc" $ alFromMap $
-      Map.mapWithKey (\k _ -> (tTypeName (Namespace k) k, Cannot)) $
+      Map.mapWithKey (\k _ -> (tTypeName (Namespace k) k, ReadOnly)) $
       Map.mapKeys unNamespace defs
 
 vsLookupDef
@@ -178,24 +179,24 @@ defForPath :: MonadFail m => Path -> Valuespace -> m Definition
 defForPath p vs =
   lookupTypeName p (vsTyAssns vs) >>= flip lookupDef (vsTyDefs vs)
 
-getLiberty :: MonadFail m => Path -> Valuespace -> m Liberty
-getLiberty path vs = case path of
-  Root :/ _ -> return Cannot
-  p :/ s -> defForPath p vs >>= defDispatch (flip childLibertyFor s)
-  _ -> return Cannot
+getEditable :: MonadFail m => Path -> Valuespace -> m Editable
+getEditable path vs = case path of
+  Root :/ _ -> return ReadOnly
+  p :/ s -> defForPath p vs >>= defDispatch (flip childEditable s)
+  _ -> return ReadOnly
 
 valuespaceGet
   :: MonadFail m => Path -> Valuespace
   -> m ( Definition
        , Tagged Definition TypeName
-       , Liberty
+       , Editable
        , RoseTreeNode [WireValue])
 valuespaceGet p vs@(Valuespace tree _ defs tas _) = do
     rtn <- note "Path not found" $ Tree.treeLookupNode p tree
     tn <- lookupTypeName p tas
     def <- lookupDef tn defs
-    lib <- getLiberty p vs
-    return (def, tn, lib, rtn)
+    edit <- getEditable p vs
+    return (def, tn, edit, rtn)
 
 type RefTypeClaims = Mos (Tagged Definition TypeName) Referee
 type TypeClaimsByPath =
@@ -416,18 +417,14 @@ processToRelayClientDigest reords dd vs =
     touched = opsTouched reords dd
     (tas', newPaths) = fillTyAssns (vsTyDefs vs) (vsTyAssns vs) (Map.keys touched)
     vs' = vs {vsTree = tree', vsTyAssns = tas'}
-    touchedLiberties = Map.mapWithKey (\k _ -> getLiberty k vs') touched
-    cannotErrs = const [LibertyErr "Touched a cannot"]
-      <$> Map.filter (== Just Cannot) touchedLiberties
-    mustErrs = const [LibertyErr "Failed to provide a value for must"] <$>
-      ( Map.filter (== Just Must)
-      $ Map.fromSet (flip getLiberty vs') $ Set.fromList
-      $ Tree.treeMissing tree')
+    editablesOfTouched = Map.mapWithKey (\k _ -> getEditable k vs') touched
+    cannotErrs = const [LibertyErr "Touched a read-only"]
+      <$> Map.filter (== Just ReadOnly) editablesOfTouched
     (validationErrs, refClaims) = Map.mapEitherWithKey (validatePath vs') touched
     refErrs = either id (const mempty) $ checkRefClaims (vsTyAssns vs') refClaims
   in
     foldl (Map.unionWith (<>)) refErrs $ fmap (Map.mapKeys PathError)
-      [fmap (fmap $ GenericErr . Text.unpack) updateErrs, validationErrs, cannotErrs, mustErrs]
+      [fmap (fmap $ GenericErr . Text.unpack) updateErrs, validationErrs, cannotErrs]
 
 fillTyAssns
   :: DefMap Definition -> TypeAssignmentMap -> [Path]

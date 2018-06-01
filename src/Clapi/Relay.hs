@@ -31,14 +31,14 @@ import Clapi.Types.Digests
 import Clapi.Types.Path
   ( Seg, Path, TypeName(..), qualify,  pattern (:</), pattern Root, parentPath
   , Namespace(..))
-import Clapi.Types.Definitions (Liberty, Definition, PostDefinition)
+import Clapi.Types.Definitions (Editable, Definition, PostDefinition)
 import Clapi.Types.Wire (WireValue)
 import Clapi.Types.SequenceOps (SequenceOp(..))
 import Clapi.Tree (RoseTreeNode(..), TimeSeries, treeLookupNode)
 import Clapi.Valuespace
   ( Valuespace(..), vsRelinquish, vsLookupPostDef, vsLookupDef
   , processToRelayProviderDigest, processToRelayClientDigest, valuespaceGet
-  , getLiberty, rootTypeName)
+  , getEditable, rootTypeName)
 import Clapi.Protocol (Protocol, waitThenFwdOnly, sendRev)
 
 mapPartitionJust :: Map k (Maybe a) -> (Map k a, Set k)
@@ -76,7 +76,7 @@ genInitDigest ps ptns tns vs =
           String
           ( Definition
           , Tagged Definition TypeName
-          , Liberty
+          , Editable
           , RoseTreeNode [WireValue])
       -> OutboundClientInitialisationDigest
     go d p (Left errStr) = d {
@@ -170,7 +170,8 @@ relay vs = waitThenFwdOnly fwd
             qContOps = Map.mapKeys (unNamespace ns :</) contOps
             qContOps' = vsMinimiseContOps qContOps vs
             mungedTas = Map.mapWithKey
-              (\p tn -> (tn, either error id $ getLiberty p vs')) updatedTyAssns
+              (\p tn ->
+                 (tn, either error id $ getEditable p vs')) updatedTyAssns
             getContOps p = case fromJust $ treeLookupNode p $ vsTree vs' of
               RtnChildren kb -> (p,) <$> mayContDiff (treeLookupNode p $ vsTree vs) kb
               _ -> Nothing
