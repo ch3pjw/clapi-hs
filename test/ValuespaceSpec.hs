@@ -1,7 +1,4 @@
-{-# LANGUAGE OverloadedStrings, QuasiQuotes #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TupleSections #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 {-# LANGUAGE StandaloneDeriving #-}
 module ValuespaceSpec where
 
@@ -18,14 +15,14 @@ import qualified Data.Set as Set
 import Control.Monad.Fail (MonadFail)
 
 import Clapi.TH
-import Clapi.Types.AssocList (AssocList, alSingleton, alEmpty, alInsert)
+import Clapi.Types.AssocList (AssocList, alSingleton, alInsert)
 import Clapi.Types
   ( InterpolationLimit(ILUninterpolated), WireValue(..)
   , TreeType(..), Editable(..)
   , tupleDef, structDef, arrayDef, ErrorIndex(..)
   , Definition(..)
   , StructDefinition(strDefTypes)
-  , TrpDigest(..), DefOp(..), DataChange(..))
+  , TrpDigest(..), trpDigest, DefOp(..), DataChange(..))
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Path
   ( Path(..), pattern (:/), pattern Root, Seg, TypeName(..), tTypeName
@@ -34,7 +31,6 @@ import Clapi.Valuespace
   ( Valuespace(..), validateVs, baseValuespace, processToRelayProviderDigest
   , processToRelayClientDigest, apiNs, vsRelinquish, ValidationErr(..))
 import Clapi.Tree (treePaths, updateTreeWithDigest)
-import Clapi.Types.SequenceOps (SequenceOp(..))
 import Clapi.Tree (RoseTreeNodeType(..))
 
 deriving instance Eq RoseTreeNodeType
@@ -54,17 +50,14 @@ validVersionTypeChange vs =
       ILUninterpolated
     rootDef = redefApiRoot
       (alInsert [segq|version|] $ tTypeName apiNs [segq|stringVersion|]) vs
-  in TrpDigest
-    apiNs
-    mempty
-    (Map.fromList
+  in (trpDigest apiNs)
+    { trpdDefinitions = Map.fromList
       [ (Tagged [segq|stringVersion|], OpDefine svd)
       , (Tagged $ unNamespace apiNs, OpDefine rootDef)
-      ])
-    (alSingleton [pathq|/version|]
-      $ ConstChange Nothing [WireValue ("pear" :: Text)])
-    mempty
-    mempty
+      ]
+    , trpdData = alSingleton [pathq|/version|] $
+      ConstChange Nothing [WireValue ("pear" :: Text)]
+    }
 
 vsAppliesCleanly :: MonadFail m => TrpDigest -> Valuespace -> m Valuespace
 vsAppliesCleanly d vs = either (fail . show) (return . snd) $
@@ -85,15 +78,12 @@ extendedVs :: MonadFail m => Definition -> Seg -> DataChange -> m Valuespace
 extendedVs def s dc =
   let
     rootDef = redefApiRoot (alInsert s $ tTypeName apiNs s) baseValuespace
-    d = TrpDigest
-      apiNs
-      mempty
-      (Map.fromList
+    d = (trpDigest apiNs)
+      { trpdDefinitions = Map.fromList
         [ (Tagged s, OpDefine def)
-        , (Tagged $ unNamespace apiNs, OpDefine rootDef)])
-      (alSingleton (Root :/ s) dc)
-      mempty
-      mempty
+        , (Tagged $ unNamespace apiNs, OpDefine rootDef)]
+      , trpdData = alSingleton (Root :/ s) dc
+      }
   in vsAppliesCleanly d baseValuespace
 
 vsWithXRef :: MonadFail m => m Valuespace
@@ -111,15 +101,11 @@ refSeg :: Seg
 refSeg = [segq|ref|]
 
 emptyArrayD :: Seg -> Valuespace -> TrpDigest
-emptyArrayD s vs = TrpDigest
-    apiNs
-    mempty
-    (Map.fromList
-     [ (Tagged s, OpDefine vaDef)
-     , (Tagged $ unNamespace apiNs, OpDefine rootDef)])
-    alEmpty
-    mempty
-    mempty
+emptyArrayD s vs = (trpDigest apiNs)
+    { trpdDefinitions = Map.fromList
+      [ (Tagged s, OpDefine vaDef)
+      , (Tagged $ unNamespace apiNs, OpDefine rootDef)]
+    }
   where
     vaDef = arrayDef
       "for test" Nothing (tTypeName apiNs [segq|version|]) Editable
@@ -139,10 +125,10 @@ spec = do
         validated `shouldBe` baseValuespace
     it "rechecks on data changes" $
       let
-        d = TrpDigest apiNs mempty mempty
-          (alSingleton [pathq|/version|] $
-           ConstChange Nothing [WireValue @Text "wrong"])
-          mempty mempty
+        d = (trpDigest apiNs)
+          { trpdData = alSingleton [pathq|/version|] $
+            ConstChange Nothing [WireValue @Text "wrong"]
+          }
       in vsProviderErrorsOn baseValuespace d [[pathq|/api/version|]]
     it "rechecks on type def changes" $
       -- Make sure changing (api, version) goes and checks things defined
@@ -152,20 +138,15 @@ spec = do
             "for test"
             (alSingleton [segq|versionString|] $ TtString "apple")
             ILUninterpolated
-          d = TrpDigest
-            apiNs mempty
-            (Map.singleton (Tagged [segq|version|]) $ OpDefine newDef)
-            alEmpty mempty mempty
+          d = (trpDigest apiNs)
+            { trpdDefinitions = Map.singleton (Tagged [segq|version|]) $
+              OpDefine newDef
+            }
       in vsProviderErrorsOn baseValuespace d [[pathq|/api/version|]]
     it "rechecks on container ops" $
       let
-        d = TrpDigest
-            apiNs
-            mempty
-            mempty
-            alEmpty
-            (Map.singleton Root $ Map.singleton [segq|version|] (Nothing, SoAbsent))
-            mempty
+        d = (trpDigest apiNs)
+          { trpdDeletes = Map.singleton (Root :/ [segq|version|]) Nothing }
       in vsProviderErrorsOn baseValuespace d [[pathq|/api|]]
     it "should only re-validate data that has been marked as invalid" $
       let
@@ -201,46 +182,34 @@ spec = do
         -- Add another version node:
         let v2ApiDef = redefApiRoot
               (alInsert v2s $ tTypeName apiNs [segq|version|]) vs
-        vs' <- vsAppliesCleanly
-          (TrpDigest apiNs mempty
-            (Map.singleton (Tagged $ unNamespace apiNs) $ OpDefine v2ApiDef)
-            v2Val mempty mempty)
+        vs' <- vsAppliesCleanly (trpDigest apiNs)
+          { trpdDefinitions = Map.singleton (Tagged $ unNamespace apiNs) $
+            OpDefine v2ApiDef
+          , trpdData = v2Val
+          }
           vs
         -- Update the ref to point at new version:
-        vs'' <- vsAppliesCleanly
-          (TrpDigest apiNs mempty mempty
-            (alSingleton (Root :/ refSeg)
-             $ ConstChange Nothing [WireValue $ Path.toText [pathq|/api/v2|]])
-            mempty mempty)
+        vs'' <- vsAppliesCleanly (trpDigest apiNs)
+          { trpdData = alSingleton (Root :/ refSeg) $
+            ConstChange Nothing [WireValue $ Path.toText [pathq|/api/v2|]]
+          }
           vs'
         (vsAppliesCleanly (validVersionTypeChange vs'') vs''
           :: Either String Valuespace) `shouldSatisfy` isRight
     it "Array" $
       let
         ars = [segq|arr|]
-        badChild = TrpDigest
-          apiNs
-          mempty
-          mempty
-          (alSingleton [pathq|/arr/bad|] $
-            ConstChange Nothing [WireValue ("boo" :: Text)])
-          mempty
-          mempty
-        goodChild = TrpDigest
-          apiNs
-          mempty
-          mempty
-          (alSingleton [pathq|/arr/mehearties|] $
-            ConstChange Nothing [WireValue @Word32 3, WireValue @Word32 4, WireValue @Int32 3])
-          mempty
-          mempty
-        removeGoodChild = TrpDigest
-          apiNs
-          mempty
-          mempty
-          alEmpty
-          (Map.singleton [pathq|/arr|] $ Map.singleton [segq|mehearties|] (Nothing, SoAbsent))
-          mempty
+        badChild = (trpDigest apiNs)
+          { trpdData = alSingleton [pathq|/arr/bad|] $
+            ConstChange Nothing [WireValue @Text "boo"]
+          }
+        goodChild = (trpDigest apiNs)
+          { trpdData = alSingleton [pathq|/arr/mehearties|] $
+            ConstChange Nothing
+            [WireValue @Word32 3, WireValue @Word32 4, WireValue @Int32 3]
+          }
+        removeGoodChild = (trpDigest apiNs)
+          {trpdDeletes = Map.singleton [pathq|/arr/mehearties|] Nothing}
       in do
         vs <- vsAppliesCleanly (emptyArrayD ars baseValuespace) baseValuespace
         vsProviderErrorsOn vs badChild [[pathq|/api/arr/bad|]]
@@ -252,26 +221,17 @@ spec = do
         rootDef = redefApiRoot
           (alInsert [segq|unfilled|] $ tTypeName apiNs [segq|version|])
           baseValuespace
-        missingChild = TrpDigest
-          apiNs
-          mempty
-          (Map.singleton (Tagged $ unNamespace apiNs) $ OpDefine rootDef)
-          alEmpty
-          mempty
-          mempty
+        missingChild = (trpDigest apiNs)
+          { trpdDefinitions = Map.singleton (Tagged $ unNamespace apiNs) $
+                OpDefine rootDef}
       in vsProviderErrorsOn baseValuespace missingChild [[pathq|/api|]]
     it "Relinquish" $
       let
         fs = [segq|foo|]
         fooRootDef = arrayDef "frd" Nothing (tTypeName apiNs [segq|version|])
           ReadOnly
-        claimFoo = TrpDigest
-          (Namespace fs)
-          mempty
-          (Map.singleton (Tagged fs) $ OpDefine fooRootDef)
-          alEmpty
-          mempty
-          mempty
+        claimFoo = (trpDigest $ Namespace fs)
+          {trpdDefinitions = Map.singleton (Tagged fs) $ OpDefine fooRootDef}
       in do
         vs <- vsAppliesCleanly claimFoo baseValuespace
         vsRelinquish (Namespace fs) vs `shouldBe` baseValuespace

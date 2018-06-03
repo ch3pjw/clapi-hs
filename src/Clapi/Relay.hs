@@ -29,11 +29,10 @@ import Clapi.Types.Digests
   , InboundClientDigest(..), OutboundProviderDigest(..)
   , DataDigest, ContainerOps)
 import Clapi.Types.Path
-  ( Seg, Path, TypeName(..), qualify,  pattern (:</), pattern Root, parentPath
-  , Namespace(..))
+  ( Seg, Path, TypeName(..), qualify,  pattern (:</), pattern Root, pattern (:/)
+  , parentPath , Namespace(..))
 import Clapi.Types.Definitions (Editable, Definition, PostDefinition)
 import Clapi.Types.Wire (WireValue)
-import Clapi.Types.SequenceOps (SequenceOp(..))
 import Clapi.Tree (RoseTreeNode(..), TimeSeries, treeLookupNode)
 import Clapi.Valuespace
   ( Valuespace(..), vsRelinquish, vsLookupPostDef, vsLookupDef
@@ -66,7 +65,7 @@ genInitDigest ps ptns tns vs =
     errMap = (pure . Text.pack <$> Map.mapKeys TypeError tnErrs) <>
       (pure . Text.pack <$> Map.mapKeys PostTypeError ptnErrs)
     initialOcd = OutboundClientDigest mempty
-      (OpDefine <$> postDefs) (OpDefine <$> defs) mempty alEmpty errMap
+      (OpDefine <$> postDefs) (OpDefine <$> defs) mempty mempty alEmpty errMap
   in
     Map.foldlWithKey go initialOcd rtns
   where
@@ -90,39 +89,41 @@ genInitDigest ps ptns tns vs =
           ocdTypeAssignments = Map.insert p (tn, lib) (ocdTypeAssignments d)}
       in case rtn of
         RtnEmpty -> error "Valid tree should not contain empty nodes, but did"
-        RtnChildren kidsAl ->
-          let (kidSegs, kidAtts) = unzip $ unAssocList kidsAl in
-          d' {
-            ocdContainerOps = Map.insert p
-              (Map.fromList $ zipWith3
-                (\s a att -> (s, (att, SoPresentAfter a)))
-                kidSegs (Nothing : (Just <$> kidSegs)) kidAtts)
-            (ocdContainerOps d')
-          }
+        RtnChildren kidsAl -> d' {ocdContainerOps =
+           Map.insert p (childAfters kidsAl) $ ocdContainerOps d'}
         RtnConstData att vals -> d'{ocdData =
           alInsert p (ConstChange att vals) $ ocdData d}
         RtnDataSeries ts ->
           d'{ocdData = alInsert p (oppifyTimeSeries ts) $ ocdData d}
 
+-- | Compares two lists of child keys returning the keys that are only present
+--   in the first (i.e. removals), the dependencies for keys that are in both
+--   (changes) and the dependencies for keys that are only in the second
+--   (additions).
 contDiff
-  :: AssocList Seg (Maybe Attributee) -> AssocList Seg (Maybe Attributee)
-  -> Map Seg (Maybe Attributee, SequenceOp Seg)
-contDiff a b = merge
-    asAbsent preserveMissing dropMatched (aftersFor a) (aftersFor b)
+  :: [Seg] -> [Seg] -> (Set Seg, Map Seg (Maybe Seg), Map Seg (Maybe Seg))
+contDiff a b =
+    ( Set.difference (Map.keysSet $ aftersFor a) (Map.keysSet $ aftersFor b)
+    , Map.intersection (aftersFor b) (aftersFor a)
+    , Map.difference (aftersFor b) (aftersFor a))
   where
-    asAfter (acc, prev) k ma = ((k, (ma, SoPresentAfter prev)) : acc, Just k)
-    aftersFor = Map.fromList . fst . alFoldlWithKey asAfter ([], Nothing)
-    dropMatched = zipWithMaybeMatched $ const $ const $ const Nothing
-    asAbsent = mapMissing $ \_ (ma, _) -> (ma, SoAbsent)
+    aftersFor :: [Seg] -> Map Seg (Maybe Seg)
+    aftersFor segs = Map.fromList $ zip segs (Nothing : (Just <$> segs))
 
-mayContDiff
-  :: Maybe (RoseTreeNode a) -> AssocList Seg (Maybe Attributee)
-  -> Maybe (Map Seg (Maybe Attributee, SequenceOp Seg))
-mayContDiff ma kb = case ma of
-    Just (RtnChildren ka) -> if ka == kb
-        then Nothing
-        else Just $ contDiff ka kb
-    _ -> Nothing
+childAfters
+  :: AssocList Seg (Maybe Attributee) -> Map Seg (Maybe Attributee, Maybe Seg)
+childAfters children = let (segs, atts) = unzip $ unAssocList children in
+  Map.fromList $ zipWith3 (\s after att -> (s, (att, after)))
+    segs (Nothing : (Just <$> segs)) atts
+
+-- mayContDiff
+--   :: Maybe (RoseTreeNode a) -> AssocList Seg (Maybe Attributee)
+--   -> Maybe (Map Seg (Maybe Attributee, SequenceOp Seg))
+-- mayContDiff ma kb = case ma of
+--     Just (RtnChildren ka) -> if ka == kb
+--         then Nothing
+--         else Just $ contDiff ka kb
+--     _ -> Nothing
 
 relay
   :: Monad m => Valuespace
@@ -138,20 +139,22 @@ relay vs = waitThenFwdOnly fwd
         Iprd (TrprDigest ns) -> do
           let vs' = vsRelinquish ns vs
           sendRev (i, Ocd $ OutboundClientDigest
-            -- FIXME: Attributing revocation to nobody!
-            (Map.singleton Root $
-               Map.singleton (unNamespace ns) (Nothing, SoAbsent))
+            mempty
             (fmap (const OpUndefine) $ Map.mapKeys (qualify ns) $
                Map.findWithDefault mempty ns $ vsPostDefs vs)
             (Map.insert rootTypeName
               (OpDefine $ fromJust $ vsLookupDef rootTypeName vs') $
               (fmap (const OpUndefine) $ Map.mapKeys (qualify ns) $
                  Map.findWithDefault mempty ns $ vsTyDefs vs))
-            mempty alEmpty mempty)
+            mempty
+            -- FIXME: Attributing revocation to nobody!
+            (Map.singleton (Root :/ unNamespace ns) Nothing)
+            alEmpty mempty)
           relay vs'
       where
         handleOwnerSuccess
-            (TrpDigest ns postDefs defs dd contOps errs) (updatedTyAssns, vs') =
+            (TrpDigest ns postDefs defs dels dd contOps errs)
+            (updatedTyAssns, vs') =
           let
             shouldPubRoot =
               Map.member (Tagged $ unNamespace ns) defs &&
@@ -172,23 +175,26 @@ relay vs = waitThenFwdOnly fwd
             mungedTas = Map.mapWithKey
               (\p tn ->
                  (tn, either error id $ getEditable p vs')) updatedTyAssns
-            getContOps p = case fromJust $ treeLookupNode p $ vsTree vs' of
-              RtnChildren kb -> (p,) <$> mayContDiff (treeLookupNode p $ vsTree vs) kb
-              _ -> Nothing
-            extraCops = Map.fromAscList $ mapMaybe (\p -> parentPath p >>= getContOps) $
-              Set.toAscList $ Map.keysSet updatedTyAssns
-            qContOps'' = extraCops <> qContOps'
+            -- getContOps p = case fromJust $ treeLookupNode p $ vsTree vs' of
+            --   RtnChildren kb -> (p,) <$> mayContDiff (treeLookupNode p $ vsTree vs) kb
+            --   _ -> Nothing
+            -- extraCops = Map.fromAscList $ mapMaybe (\p -> parentPath p >>= getContOps) $
+            --   Set.toAscList $ Map.keysSet updatedTyAssns
+            -- qContOps'' = extraCops <> qContOps'
           in do
             sendRev (i,
               Ocd $ OutboundClientDigest
-                qContOps''
+                qContOps'
                 qPostDefs
                 -- FIXME: we need to provide defs for type assignments too.
                 qDefs''
-                mungedTas qDd' errs')
+                mungedTas
+                dels -- plus something from the getContOps stuff above I reckon
+                qDd' errs')
             relay vs'
         handleClientDigest
-            (InboundClientDigest gets postTypeGets typeGets contOps dd) errMap =
+            (InboundClientDigest gets postTypeGets typeGets contOps dels dd)
+            errMap =
           let
             -- TODO: Be more specific in what we reject (filtering by TpId
             -- rather than entire path)
@@ -207,7 +213,7 @@ relay vs = waitThenFwdOnly fwd
             cid = genInitDigest gets postTypeGets typeGets vs
             cid' = cid{ocdErrors =
               Map.unionWith (<>) (ocdErrors cid) (fmap (Text.pack . show) <$> errMap)}
-            opd = OutboundProviderDigest contOps'' dd''
+            opd = OutboundProviderDigest dels contOps'' dd''
           in do
             unless (ocdNull cid') $ sendRev (i, Ocid cid')
             unless (opdNull opd) $ sendRev (i, Opd opd)

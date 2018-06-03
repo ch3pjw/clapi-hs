@@ -31,7 +31,7 @@ import Clapi.Types.Path (
     NodePath)
 import Clapi.Types.Digests
   ( DataDigest, ContainerOps, DataChange(..), TimeSeriesDataOp(..))
-import Clapi.Types.SequenceOps (SequenceOp, updateUniqList)
+import Clapi.Types.SequenceOps (reorderUniqList)
 
 type TpId = Word32
 
@@ -70,14 +70,14 @@ treePaths p t = case t of
 
 treeApplyReorderings
   :: MonadFail m
-  => Map Seg (Maybe Attributee, SequenceOp Seg) -> RoseTree a -> m (RoseTree a)
+  => Map Seg (Maybe Attributee, Maybe Seg) -> RoseTree a -> m (RoseTree a)
 treeApplyReorderings contOps (RtContainer children) =
   let
     attMap = fst <$> contOps
     reattribute s (oldMa, rt) = (Map.findWithDefault oldMa s attMap, rt)
   in
     RtContainer . alFmapWithKey reattribute . alPickFromMap (alToMap children)
-    <$> (updateUniqList (snd <$> contOps) $ alKeys children)
+    <$> (reorderUniqList (snd <$> contOps) $ alKeys children)
 treeApplyReorderings _ _ = fail "Not a container"
 
 treeConstSet :: Maybe Attributee -> a -> RoseTree a -> RoseTree a
@@ -152,7 +152,7 @@ updateTreeWithDigest contOps dd = runState $ do
     return $ Map.filter (not . null) $ Map.unionWith (<>) errs errs'
   where
     applyContOp
-      :: NodePath -> Map Seg (Maybe Attributee, SequenceOp Seg)
+      :: NodePath -> Map Seg (Maybe Attributee, Maybe Seg)
       -> State (RoseTree [WireValue]) [Text]
     applyContOp np m = do
       eRt <- treeAdjustF Nothing (treeApplyReorderings m) np <$> get

@@ -135,6 +135,10 @@ instance Encodable PostMessage where
     builder (MsgPost p ph args) = builder p <<>> builder ph <<>> builder args
     parser = MsgPost <$> parser <*> parser <*> parser
 
+instance Encodable DeleteMessage where
+    builder (MsgDelete p att) = builder p <<>> builder att
+    parser = MsgDelete <$> parser <*> parser
+
 data DataUpdateMsgType
   = DUMTConstSet
   | DUMTSet
@@ -170,36 +174,10 @@ instance Encodable DataUpdateMessage where
     builder = tdTaggedBuilder dumtTaggedData dumtBuilder
     parser = tdTaggedParser dumtTaggedData dumtParser
 
-
-data ContainerUpdateMsgType
-  = CUMTPresentAfter
-  | CUMTAbsent
-  deriving (Enum, Bounded)
-
-cumtTaggedData :: TaggedData ContainerUpdateMsgType ContainerUpdateMessage
-cumtTaggedData = taggedData typeToTag msgToType
-  where
-    typeToTag CUMTPresentAfter = [btq|>|]
-    typeToTag CUMTAbsent = [btq|-|]
-    msgToType (MsgPresentAfter {}) = CUMTPresentAfter
-    msgToType (MsgAbsent {}) = CUMTAbsent
-
-cumtParser :: ContainerUpdateMsgType -> Parser ContainerUpdateMessage
-cumtParser e = case e of
-  CUMTPresentAfter ->
-    MsgPresentAfter <$> parser <*> parser <*> parser <*> parser
-  CUMTAbsent -> MsgAbsent <$> parser <*> parser <*> parser
-
-cumtBuilder :: MonadFail m => ContainerUpdateMessage -> m Builder
-cumtBuilder msg = case msg of
-  MsgPresentAfter p t r a ->
-    builder p <<>> builder t <<>> builder r <<>> builder a
-  MsgAbsent p t a ->
-    builder p <<>> builder t <<>> builder a
-
 instance Encodable ContainerUpdateMessage where
-    parser = tdTaggedParser cumtTaggedData cumtParser
-    builder = tdTaggedBuilder cumtTaggedData cumtBuilder
+    parser =  MsgMoveAfter <$> parser <*> parser <*> parser <*> parser
+    builder (MsgMoveAfter p s targ att) =
+      builder p <<>> builder s <<>> builder targ <<>> builder att
 
 data TrBundleType
   = TrbtProvider | TrbtProviderRelinquish | TrbtClient deriving (Enum, Bounded)
@@ -218,19 +196,21 @@ trBundleTaggedData = taggedData typeToTag bundleToType
 
 instance Encodable ToRelayBundle where
     builder = tdTaggedBuilder trBundleTaggedData $ \bund -> case bund of
-      Trpb (ToRelayProviderBundle ns errs postDefs defs dat contMsgs) ->
+      Trpb (ToRelayProviderBundle ns errs postDefs defs dels dat contMsgs) ->
         builder ns <<>> builder errs <<>> builder postDefs <<>> builder defs
-        <<>> builder dat <<>> builder contMsgs
+        <<>> builder dels <<>> builder dat <<>> builder contMsgs
       Trpr (ToRelayProviderRelinquish ns) -> builder ns
-      Trcb (ToRelayClientBundle subs posts dat contMsgs) ->
-        builder subs <<>> builder posts <<>> builder dat <<>> builder contMsgs
+      Trcb (ToRelayClientBundle subs dels posts dat contMsgs) ->
+        builder subs <<>> builder dels <<>> builder posts <<>> builder dat
+        <<>> builder contMsgs
     parser = tdTaggedParser trBundleTaggedData $ \ty -> case ty of
       TrbtProvider -> Trpb <$>
         (ToRelayProviderBundle <$> parser <*> parser <*> parser <*> parser
-        <*> parser <*> parser)
+        <*> parser <*> parser <*> parser)
       TrbtProviderRelinquish -> Trpr . ToRelayProviderRelinquish <$> parser
       TrbtClient -> Trcb <$>
-        (ToRelayClientBundle <$> parser <*> parser <*> parser <*> parser)
+        (ToRelayClientBundle <$> parser <*> parser <*> parser <*> parser
+         <*> parser)
 
 data FrBundleType
   = FrbtProvider | FrbtProviderError | FrbtClient deriving (Enum, Bounded)
@@ -249,20 +229,23 @@ frBundleTaggedData = taggedData typeToTag bundleToType
 
 instance Encodable FromRelayBundle where
     builder = tdTaggedBuilder frBundleTaggedData $ \bund -> case bund of
-      Frpb (FromRelayProviderBundle ns posts dat contMsgs) ->
-        builder ns <<>> builder posts <<>> builder dat <<>> builder contMsgs
+      Frpb (FromRelayProviderBundle ns dels posts dat contMsgs) ->
+        builder ns <<>> builder dels <<>> builder posts <<>> builder dat
+        <<>> builder contMsgs
       Frpeb (FromRelayProviderErrorBundle errs) -> builder errs
       Frcb (
-          FromRelayClientBundle pTyUns tyUns datUns errs postDefs defs tas dat
-          contMsgs) ->
+          FromRelayClientBundle pTyUns tyUns datUns errs postDefs defs tas dels
+          dat contMsgs) ->
         builder pTyUns <<>> builder tyUns <<>> builder datUns
         <<>> builder errs <<>> builder postDefs <<>> builder defs
-        <<>> builder tas <<>> builder dat <<>> builder contMsgs
+        <<>> builder tas <<>> builder dels <<>> builder dat
+        <<>> builder contMsgs
     parser = tdTaggedParser frBundleTaggedData $ \ty -> case ty of
       FrbtProvider -> Frpb <$>
-        (FromRelayProviderBundle <$> parser <*> parser <*> parser <*> parser)
+        (FromRelayProviderBundle <$> parser <*> parser <*> parser <*> parser
+         <*> parser)
       FrbtProviderError ->
         Frpeb . FromRelayProviderErrorBundle <$> parser
       FrbtClient -> Frcb <$>
         (FromRelayClientBundle <$> parser <*> parser <*>  parser <*> parser
-        <*> parser <*> parser <*> parser <*> parser <*> parser)
+        <*> parser <*> parser <*> parser <*> parser <*> parser <*> parser)

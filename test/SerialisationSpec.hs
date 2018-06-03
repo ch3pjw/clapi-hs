@@ -19,7 +19,7 @@ import Clapi.Types
   ( Time, Attributee, WireValue
   , Interpolation(..), SubMessage(..), DataUpdateMessage(..), TypeMessage(..)
   , PostMessage(..), MsgError(..), TpId, DefMessage(..)
-  , ContainerUpdateMessage(..)
+  , ContainerUpdateMessage(..), DeleteMessage(..)
   , ToRelayClientBundle(..), ToRelayProviderBundle(..)
   , FromRelayClientBundle(..), FromRelayProviderBundle(..)
   , FromRelayProviderErrorBundle(..), ToRelayProviderRelinquish(..)
@@ -98,10 +98,11 @@ instance Arbitrary DataUpdateMessage where
 
 
 instance Arbitrary ContainerUpdateMessage where
-  arbitrary = oneof
-    [ MsgPresentAfter <$> arbitrary <*> arbitrary <*> arbitrary <*> genAttributee
-    , MsgAbsent <$> arbitrary <*> arbitrary <*> genAttributee
-    ]
+  arbitrary = MsgMoveAfter <$> arbitrary <*> arbitrary <*> arbitrary
+    <*> genAttributee
+
+instance Arbitrary DeleteMessage where
+  arbitrary = MsgDelete <$> arbitrary <*> arbitrary
 
 instance Arbitrary a => Arbitrary (ErrorIndex a) where
   arbitrary = oneof
@@ -120,15 +121,15 @@ instance Arbitrary ToRelayProviderBundle where
   arbitrary = ToRelayProviderBundle
     <$> arbitrary <*> smallListOf arbitrary <*> smallListOf arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
-    <*> smallListOf arbitrary
-  shrink (ToRelayProviderBundle n e pt t d c) =
-    [ToRelayProviderBundle n e' pt' t' d' c' |
-       (e', pt', t', d', c') <- shrink (e, pt, t, d, c)]
+    <*> smallListOf arbitrary <*> smallListOf arbitrary
+  shrink (ToRelayProviderBundle n e pt t dels d c) =
+    [ToRelayProviderBundle n e' pt' t' dels' d' c' |
+       (e', pt', t', dels', d', c') <- shrink (e, pt, t, dels, d, c)]
 
 instance Arbitrary FromRelayProviderBundle where
   arbitrary = FromRelayProviderBundle <$> arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
-    <*> smallListOf arbitrary
+    <*> smallListOf arbitrary <*> smallListOf arbitrary
 
 instance Arbitrary ToRelayProviderRelinquish where
   arbitrary = ToRelayProviderRelinquish <$> arbitrary
@@ -139,9 +140,10 @@ instance Arbitrary FromRelayProviderErrorBundle where
 instance Arbitrary ToRelayClientBundle where
   arbitrary = ToRelayClientBundle <$> smallListOf arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
-    <*> smallListOf arbitrary
-  shrink (ToRelayClientBundle s p d c) =
-    [ToRelayClientBundle s' p' d' c' | (s', p', d', c') <- shrink (s, p, d, c)]
+    <*> smallListOf arbitrary <*> smallListOf arbitrary
+  shrink (ToRelayClientBundle s dels p d c) =
+    [ToRelayClientBundle s' dels' p' d' c'
+    | (s', dels', p', d', c') <- shrink (s, dels, p, d, c)]
 
 instance Arbitrary FromRelayClientBundle where
   arbitrary = FromRelayClientBundle <$> smallListOf arbitrary
@@ -149,10 +151,11 @@ instance Arbitrary FromRelayClientBundle where
     <*> smallListOf arbitrary <*> smallListOf arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
-  shrink (FromRelayClientBundle ptu tu du e postDefs defs tas dd c) =
-    [FromRelayClientBundle ptu' tu' du' e' postDefs' defs' tas' dd' c'
-    | (ptu', tu', du', e', postDefs', defs', tas', dd', c')
-    <- shrink (ptu, tu, du, e, postDefs, defs, tas, dd, c)]
+    <*> smallListOf arbitrary
+  shrink (FromRelayClientBundle ptu tu du e postDefs defs tas dels dd c) =
+    [FromRelayClientBundle ptu' tu' du' e' postDefs' defs' tas' dels' dd' c'
+    | (ptu', tu', du', e', postDefs', defs', tas', dels', dd', c')
+    <- shrink (ptu, tu, du, e, postDefs, defs, tas, dels, dd, c)]
 
 
 instance Arbitrary ToRelayBundle where

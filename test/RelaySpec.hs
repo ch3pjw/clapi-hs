@@ -21,7 +21,6 @@ import Clapi.Types.Digests
   ( DefOp(..), DataChange(..), TrpDigest(..), trpDigest
   , InboundDigest(..), InboundClientDigest(..), OutboundDigest(..)
   , OutboundClientDigest(..), outboundClientDigest, TrprDigest(..))
-import Clapi.Types.SequenceOps (SequenceOp(..))
 import Clapi.Types.Messages (ErrorIndex(..))
 import Clapi.Types.Path
   (pattern Root, tTypeName, pattern (:/), pattern (:</), Namespace(..))
@@ -55,8 +54,7 @@ spec = describe "the relay protocol" $ do
           , ocdTypeAssignments = Map.insert
             [pathq|/foo|] (tTypeName (Namespace foo) foo, ReadOnly) mempty
           , ocdContainerOps = Map.singleton Root $
-              Map.singleton foo
-              (Nothing, SoPresentAfter (Just $ unNamespace apiNs))
+              Map.singleton foo (Nothing, Just $ unNamespace apiNs)
           }
         test = do
           sendFwd ((), inDig)
@@ -78,8 +76,7 @@ spec = describe "the relay protocol" $ do
                 vsLookupDef rootTypeName baseValuespace)
             , (tTypeName (Namespace foo) foo, OpUndefine)
             ]
-          , ocdContainerOps = Map.singleton Root $
-              Map.singleton foo (Nothing, SoAbsent)
+          , ocdDeletes = Map.singleton (Root :/ foo) Nothing
           }
         test = do
           sendFwd ((), Iprd $ TrprDigest $ Namespace foo)
@@ -93,7 +90,8 @@ spec = describe "the relay protocol" $ do
           }
         test = do
           sendFwd ((), Icd $
-            InboundClientDigest (Set.singleton p) mempty mempty mempty alEmpty)
+            InboundClientDigest (Set.singleton p) mempty mempty mempty mempty
+            alEmpty)
           waitThenRevOnly $ lift . (`shouldBe` expectedOutDig) . snd
       in runEffect $ test <<-> relay baseValuespace
     it "should have container ops for implicitly created children" $
@@ -119,7 +117,7 @@ spec = describe "the relay protocol" $ do
           , ocdTypeAssignments = Map.singleton qKid
               (tTypeName (Namespace foo) kid, ReadOnly)
           , ocdContainerOps = Map.singleton fooP $
-            Map.singleton kid (Nothing, SoPresentAfter Nothing)
+            Map.singleton kid (Nothing, Nothing)
           }
         test = do
           sendFwd ((), inDig)
@@ -146,8 +144,11 @@ spec = describe "the relay protocol" $ do
     it "should not send empty ocids/opds to client requests" $
       let
         test = do
-            sendFwd (1, Icd $ InboundClientDigest mempty mempty mempty mempty alEmpty)
-            sendFwd (2, Icd $ InboundClientDigest (Set.singleton [pathq|/whatevz|]) mempty mempty mempty alEmpty)
+            sendFwd (1, Icd $ InboundClientDigest mempty mempty mempty mempty
+                      mempty alEmpty)
+            sendFwd (2, Icd $ InboundClientDigest
+                      (Set.singleton [pathq|/whatevz|]) mempty mempty mempty
+                      mempty alEmpty)
             waitThenRevOnly $ lift . (`shouldSatisfy` (== (2 :: Int)) . fst)
       in runEffect $ test <<-> relay baseValuespace
   where

@@ -24,11 +24,12 @@ import Clapi.Types.Digests
   ( OutboundDigest(..), InboundDigest(..)
   , InboundClientDigest(..), inboundClientDigest
   , OutboundClientDigest(..), outboundClientDigest
-  , OutboundProviderDigest(..), frpDigest, SubOp(..), DefOp(..))
+  , OutboundProviderDigest(..), outboundProviderDigest, frpDigest
+  , SubOp(..), DefOp(..))
 import Clapi.Types.Path
-  (Path, Seg, pattern Root, TypeName(..), tTypeName, Namespace(..))
+  ( Path, Seg, pattern Root, pattern (:/), TypeName(..), tTypeName
+  , Namespace(..))
 import Clapi.Types.AssocList (alSingleton, alEmpty, alFromList)
-import Clapi.Types.SequenceOps (SequenceOp(..))
 import Clapi.PerClientProto (ClientEvent(..), ServerEvent(..))
 import Clapi.NamespaceTracker (nstProtocol, Originator(..))
 import qualified Clapi.Protocol as Protocol
@@ -199,8 +200,7 @@ spec = do
             waitThenFwdOnly $ \(i, d) -> do
               lift $ d `shouldBe` Iprd (TrprDigest $ Namespace helloS)
               sendRev (i, Ocd $ ocdEmpty
-                {ocdContainerOps = Map.singleton Root $
-                  Map.singleton helloS (Nothing, SoAbsent)})
+                {ocdDeletes = Map.singleton (Root :/ helloS) Nothing})
               sendRev (i, Ocd $ ocdEmpty
                 {ocdData = alFromList
                   [ (helloP, textChange "t")
@@ -231,10 +231,9 @@ spec = do
               { frpdData = alSingleton Root $ textChange "x"
               }
         fauxRelay = do
-            waitThenFwdOnly $ \(i, d) -> sendRev (i, Opd $ OutboundProviderDigest
-              { opdContainerOps = mempty
-              , opdData = alSingleton helloP $ textChange "x"
-              })
+            waitThenFwdOnly $
+              \(i, d) -> sendRev (i, Opd $ outboundProviderDigest
+                { opdData = alSingleton helloP $ textChange "x" })
             relayNoMore
       in runEffect $ forTest <<-> nstProtocol <<-> fauxRelay
     it "Returns client validation errors" $

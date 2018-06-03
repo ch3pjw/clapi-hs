@@ -94,16 +94,17 @@ data DataUpdateMessage
    deriving (Eq, Show)
 
 data ContainerUpdateMessage
-  = MsgPresentAfter
+  = MsgMoveAfter
       { cuMsgPath :: Path
       , cuMsgTarg :: Seg
       , cuMsgRef :: Maybe Seg
       , cuMsgAttributee :: Maybe Attributee
       }
-  | MsgAbsent
-      { cuMsgPath :: Path
-      , cuMsgTarg :: Seg
-      , cuMsgAttributee :: Maybe Attributee
+  deriving (Eq, Show)
+
+data DeleteMessage = MsgDelete
+      { dMsgPath :: Path
+      , dMsgAttributee :: Maybe Attributee
       }
   deriving (Eq, Show)
 
@@ -112,6 +113,7 @@ data ToRelayProviderBundle = ToRelayProviderBundle
   , trpbErrors :: [MsgError Seg]
   , trpbPostDefs :: [DefMessage (Tagged PostDefinition Seg) PostDefinition]
   , trpbDefinitions :: [DefMessage (Tagged Definition Seg) Definition]
+  , trpbDeletes :: [DeleteMessage]
   , trpbData :: [DataUpdateMessage]
   , trpbContMsgs :: [ContainerUpdateMessage]
   } deriving (Show, Eq)
@@ -121,6 +123,7 @@ data ToRelayProviderRelinquish
 
 data FromRelayProviderBundle = FromRelayProviderBundle
   { frpbNamespace :: Namespace
+  , frpbDeletes :: [DeleteMessage]
   , frpbPosts :: [PostMessage]
   , frpbData :: [DataUpdateMessage]
   , frpbContMsgs :: [ContainerUpdateMessage]
@@ -132,6 +135,7 @@ data FromRelayProviderErrorBundle = FromRelayProviderErrorBundle
 
 data ToRelayClientBundle = ToRelayClientBundle
   { trcbSubs :: [SubMessage]
+  , trcbDeletes :: [DeleteMessage]
   , trcbPosts :: [PostMessage]
   , trcbData :: [DataUpdateMessage]
   , trcbContMsgs :: [ContainerUpdateMessage]
@@ -145,6 +149,7 @@ data FromRelayClientBundle = FromRelayClientBundle
   , frcbPostDefs :: [DefMessage (Tagged PostDefinition TypeName) PostDefinition]
   , frcbDefinitions :: [DefMessage (Tagged Definition TypeName) Definition]
   , frcbTypeAssignments :: [TypeMessage]
+  , frcbDeletes :: [DeleteMessage]
   , frcbData :: [DataUpdateMessage]
   , frcbContMsgs :: [ContainerUpdateMessage]
   } deriving (Show, Eq)

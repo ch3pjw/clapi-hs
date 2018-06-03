@@ -17,9 +17,7 @@ import Clapi.Types.Base (Attributee, Time, Interpolation)
 import Clapi.Types.Definitions (Definition, Editable, PostDefinition)
 import Clapi.Types.Messages
 import Clapi.Types.Path
-  ( Seg, Path, TypeName(..), tTnNamespace, pattern (:</), pattern (:/)
-  , Namespace(..))
-import Clapi.Types.SequenceOps (SequenceOp(..), isSoAbsent)
+  ( Seg, Path, TypeName(..), tTnNamespace, pattern (:</), Namespace(..))
 import Clapi.Types.Wire (WireValue)
 
 data SubOp = OpSubscribe | OpUnsubscribe deriving (Show, Eq)
@@ -42,7 +40,7 @@ data DataChange
   deriving (Show, Eq)
 type DataDigest = AssocList Path DataChange
 
-type ContainerOps = Map Path (Map Seg (Maybe Attributee, SequenceOp Seg))
+type ContainerOps = Map Path (Map Seg (Maybe Attributee, Maybe Seg))
 
 newtype PostOp = OpPost {opArgs :: Map Seg WireValue} deriving (Show, Eq)
 
@@ -50,35 +48,33 @@ data TrpDigest = TrpDigest
   { trpdNamespace :: Namespace
   , trpdPostDefs :: Map (Tagged PostDefinition Seg) (DefOp PostDefinition)
   , trpdDefinitions :: Map (Tagged Definition Seg) (DefOp Definition)
+  , trpdDeletes :: Map Path (Maybe Attributee)
   , trpdData :: DataDigest
   , trpdContainerOps :: ContainerOps
   , trpdErrors :: Map (ErrorIndex Seg) [Text]
   } deriving (Show, Eq)
 
 trpDigest :: Namespace -> TrpDigest
-trpDigest ns = TrpDigest ns mempty mempty alEmpty mempty mempty
+trpDigest ns = TrpDigest ns mempty mempty mempty alEmpty mempty mempty
 
 trpdRemovedPaths :: TrpDigest -> [Path]
 trpdRemovedPaths trpd =
-    ((unNamespace $ trpdNamespace trpd) :</) <$>
-    Map.foldlWithKey f [] (trpdContainerOps trpd)
-  where
-    f acc p segMap = acc ++
-      (fmap (p :/) $ Map.keys $ Map.filter isSoAbsent $ fmap snd segMap)
+    ((unNamespace $ trpdNamespace trpd) :</) <$> Map.keys (trpdDeletes trpd)
 
 trpdNull :: TrpDigest -> Bool
-trpdNull (TrpDigest _ns postDefs defs dd cops errs) =
-  null postDefs && null defs && alNull dd && null cops && null errs
+trpdNull (TrpDigest _ns postDefs defs dels dd cops errs) =
+  null postDefs && null defs && null dels && alNull dd && null cops && null errs
 
 data FrpDigest = FrpDigest
   { frpdNamespace :: Namespace
+  , frpdDeletes :: Map Path (Maybe Attributee)
   , frpdPosts :: Map (Path, Seg) PostOp
   , frpdData :: DataDigest
   , frpdContainerOps :: ContainerOps
   } deriving (Show, Eq)
 
 frpDigest :: Namespace -> FrpDigest
-frpDigest ns = FrpDigest ns mempty alEmpty mempty
+frpDigest ns = FrpDigest ns mempty mempty alEmpty mempty
 
 data FrpErrorDigest = FrpErrorDigest
   { frpedErrors :: Map (ErrorIndex TypeName) [Text]
@@ -88,13 +84,14 @@ data TrcDigest = TrcDigest
   { trcdPostTypeSubs :: Map (Tagged PostDefinition TypeName) SubOp
   , trcdTypeSubs :: Map (Tagged Definition TypeName) SubOp
   , trcdDataSubs :: Map Path SubOp
+  , trcdDeletes :: Map Path (Maybe Attributee)
   , trcdPosts :: Map (Path, Seg) PostOp
   , trcdData :: DataDigest
   , trcdContainerOps :: ContainerOps
   } deriving (Show, Eq)
 
 trcdEmpty :: TrcDigest
-trcdEmpty = TrcDigest mempty mempty mempty mempty alEmpty mempty
+trcdEmpty = TrcDigest mempty mempty mempty mempty mempty alEmpty mempty
 
 data FrcDigest = FrcDigest
   { frcdPostTypeUnsubs :: Set (Tagged PostDefinition TypeName)
@@ -103,14 +100,15 @@ data FrcDigest = FrcDigest
   , frcdPostDefs :: Map (Tagged PostDefinition TypeName) (DefOp PostDefinition)
   , frcdDefinitions :: Map (Tagged Definition TypeName) (DefOp Definition)
   , frcdTypeAssignments :: Map Path (Tagged Definition TypeName, Editable)
+  , frcdDeletes :: Map Path (Maybe Attributee)
   , frcdData :: DataDigest
   , frcdContainerOps :: ContainerOps
   , frcdErrors :: Map (ErrorIndex TypeName) [Text]
   } deriving (Show, Eq)
 
 frcdEmpty :: FrcDigest
-frcdEmpty = FrcDigest mempty mempty mempty mempty mempty mempty alEmpty mempty
-  mempty
+frcdEmpty = FrcDigest mempty mempty mempty mempty mempty mempty mempty alEmpty
+  mempty mempty
 
 newtype TrprDigest
   = TrprDigest {trprdNamespace :: Namespace}
@@ -129,10 +127,11 @@ data FrDigest
   deriving (Show, Eq)
 
 trcdNamespaces :: TrcDigest -> Set Namespace
-trcdNamespaces (TrcDigest pts ts ds posts dd co) =
+trcdNamespaces (TrcDigest pts ts ds dels posts dd co) =
     (Set.map tTnNamespace $ Map.keysSet pts)
     <> (Set.map tTnNamespace $ Map.keysSet ts)
     <> pathKeyNss (Map.keysSet ds)
+    <> pathKeyNss (Map.keysSet dels)
     <> pathKeyNss (Set.map fst $ Map.keysSet $ posts)
     <> pathKeyNss (alKeysSet dd) <> pathKeyNss (Map.keysSet co)
   where
@@ -142,9 +141,9 @@ trcdNamespaces (TrcDigest pts ts ds posts dd co) =
     pNs _ = Nothing
 
 frcdNull :: FrcDigest -> Bool
-frcdNull (FrcDigest pTyUns tyUns datUns postDefs defs tas dd cops errs) =
+frcdNull (FrcDigest pTyUns tyUns datUns postDefs defs tas dels dd cops errs) =
   null pTyUns && null tyUns && null datUns && null postDefs && null defs
-  && null tas && null dd && null cops && null errs
+  && null tas && null dels && null dd && null cops && null errs
 
 -- | "Split" because kinda like :: Map k1 a -> Map k2 (Map k3 a)
 splitMap :: (Ord a, Ord b) => [(a, (b, c))] -> Map a (Map b c)
@@ -176,17 +175,13 @@ produceDataUpdateMessages = mconcat . alValues . alFmapWithKey procDc
 digestContOpMessages :: [ContainerUpdateMessage] -> ContainerOps
 digestContOpMessages = splitMap . fmap procMsg
   where
-    procMsg msg = case msg of
-      MsgPresentAfter p targ ref att -> (p, (targ, (att, SoPresentAfter ref)))
-      MsgAbsent p targ att -> (p, (targ, (att, SoAbsent)))
+    procMsg (MsgMoveAfter p targ ref att) = (p, (targ, (att, ref)))
 
 produceContOpMessages :: ContainerOps -> [ContainerUpdateMessage]
 produceContOpMessages = mconcat . Map.elems . Map.mapWithKey
     (\p -> Map.elems . Map.mapWithKey (procCo p))
   where
-    procCo p targ (att, co) = case co of
-      SoPresentAfter ref -> MsgPresentAfter p targ ref att
-      SoAbsent -> MsgAbsent p targ att
+    procCo p targ (att, mRef) = MsgMoveAfter p targ mRef att
 
 
 qualifyDefMessage :: Namespace -> DefMessage Seg def -> DefMessage TypeName def
@@ -272,6 +267,12 @@ producePostMessages = fmap (uncurry poToPm) . Map.toList
   where
     poToPm (p, s) (OpPost args) = MsgPost p s args
 
+digestDelMessages :: [DeleteMessage] -> Map Path (Maybe Attributee)
+digestDelMessages = Map.fromList . fmap (\(MsgDelete p att) -> (p, att))
+
+produceDelMessages :: Map Path (Maybe Attributee) -> [DeleteMessage]
+produceDelMessages = fmap (uncurry MsgDelete) . Map.toList
+
 digestToRelayBundle :: ToRelayBundle -> TrDigest
 digestToRelayBundle trb = case trb of
     Trpb b -> Trpd $ digestToRelayProviderBundle b
@@ -280,10 +281,11 @@ digestToRelayBundle trb = case trb of
   where
     digestToRelayProviderBundle :: ToRelayProviderBundle -> TrpDigest
     digestToRelayProviderBundle
-        (ToRelayProviderBundle ns errs postDefs defs dat cont) =
+        (ToRelayProviderBundle ns errs postDefs defs delMsgs dat cont) =
       TrpDigest ns
         (digestDefMessages postDefs)
         (digestDefMessages defs)
+        (digestDelMessages delMsgs)
         (digestDataUpdateMessages dat)
         (digestContOpMessages cont)
         (digestErrMessages errs)
@@ -293,14 +295,16 @@ digestToRelayBundle trb = case trb of
       TrprDigest ns
 
     digestToRelayClientBundle :: ToRelayClientBundle -> TrcDigest
-    digestToRelayClientBundle (ToRelayClientBundle subs postMsgs dat cont) =
+    digestToRelayClientBundle
+        (ToRelayClientBundle subs delMsgs postMsgs dat cont) =
       let
         (postTySubs, tySubs, datSubs) = digestSubMessages subs
+        dels = digestDelMessages delMsgs
         postD = digestPostMessages postMsgs
         dd = digestDataUpdateMessages dat
         co = digestContOpMessages cont
       in
-        TrcDigest postTySubs tySubs datSubs postD dd co
+        TrcDigest postTySubs tySubs datSubs dels postD dd co
 
 produceToRelayBundle :: TrDigest -> ToRelayBundle
 produceToRelayBundle trd = case trd of
@@ -308,23 +312,27 @@ produceToRelayBundle trd = case trd of
     Trprd d -> Trpr $ produceToRelayProviderRelinquish d
     Trcd d -> Trcb $ produceToRelayClientBundle d
   where
-    produceToRelayProviderBundle (TrpDigest ns postDefs defs dat cops errs) =
+    produceToRelayProviderBundle
+        (TrpDigest ns postDefs defs dels dat cops errs) =
       ToRelayProviderBundle
         ns (produceErrMessages errs)
         (produceDefMessages postDefs) (produceDefMessages defs)
+        (produceDelMessages dels)
         (produceDataUpdateMessages dat) (produceContOpMessages cops)
 
     produceToRelayProviderRelinquish (TrprDigest ns) =
       ToRelayProviderRelinquish ns
 
-    produceToRelayClientBundle (TrcDigest pTySubs tySubs datSubs postD dd co) =
+    produceToRelayClientBundle
+        (TrcDigest pTySubs tySubs datSubs dels postD dd co) =
       let
         subs = produceSubMessages pTySubs tySubs datSubs
+        delMsgs = produceDelMessages dels
         postMsgs = producePostMessages postD
         dat = produceDataUpdateMessages dd
         cont = produceContOpMessages co
       in
-        ToRelayClientBundle subs postMsgs dat cont
+        ToRelayClientBundle subs delMsgs postMsgs dat cont
 
 digestFromRelayBundle :: FromRelayBundle -> FrDigest
 digestFromRelayBundle frb = case frb of
@@ -332,15 +340,17 @@ digestFromRelayBundle frb = case frb of
     Frpeb b -> Frped $ digestFromRelayProviderErrorBundle b
     Frcb b -> Frcd $ digestFromRelayClientBundle b
   where
-    digestFromRelayProviderBundle (FromRelayProviderBundle ns posts dums coms) =
-        FrpDigest ns (digestPostMessages posts) (digestDataUpdateMessages dums)
-          (digestContOpMessages coms)
+    digestFromRelayProviderBundle
+        (FromRelayProviderBundle ns dels posts dums coms) =
+      FrpDigest ns (digestDelMessages dels) (digestPostMessages posts)
+        (digestDataUpdateMessages dums) (digestContOpMessages coms)
 
     digestFromRelayProviderErrorBundle (FromRelayProviderErrorBundle errs) =
         FrpErrorDigest $ digestErrMessages errs
 
     digestFromRelayClientBundle
-        (FromRelayClientBundle ptSubs tSubs dSubs errs postDefs defs tas dums coms) =
+        (FromRelayClientBundle ptSubs tSubs dSubs errs postDefs defs tas dels
+        dums coms) =
       FrcDigest
         (Set.fromList ptSubs)
         (Set.fromList tSubs)
@@ -348,6 +358,7 @@ digestFromRelayBundle frb = case frb of
         (digestDefMessages postDefs)
         (digestDefMessages defs)
         (digestTypeMessages tas)
+        (digestDelMessages dels)
         (digestDataUpdateMessages dums)
         (digestContOpMessages coms)
         (digestErrMessages errs)
@@ -359,8 +370,9 @@ produceFromRelayBundle frd = case frd of
     Frcd d -> Frcb $ produceFromRelayClientBundle d
   where
     produceFromRelayProviderBundle :: FrpDigest -> FromRelayProviderBundle
-    produceFromRelayProviderBundle (FrpDigest ns posts dd co) =
-      FromRelayProviderBundle ns (producePostMessages posts)
+    produceFromRelayProviderBundle (FrpDigest ns dels posts dd co) =
+      FromRelayProviderBundle ns
+      (produceDelMessages dels) (producePostMessages posts)
       (produceDataUpdateMessages dd) (produceContOpMessages co)
 
     produceFromRelayProviderErrorBundle
@@ -370,12 +382,12 @@ produceFromRelayBundle frd = case frd of
 
     produceFromRelayClientBundle :: FrcDigest -> FromRelayClientBundle
     produceFromRelayClientBundle
-        (FrcDigest postTyUns tyUns datUns postDefs defs tas dd co errs) =
+        (FrcDigest postTyUns tyUns datUns postDefs defs tas dels dd co errs) =
       FromRelayClientBundle
         (Set.toList postTyUns) (Set.toList tyUns) (Set.toList datUns)
         (produceErrMessages errs)
         (produceDefMessages postDefs) (produceDefMessages defs)
-        (produceTypeMessages tas)
+        (produceTypeMessages tas) (produceDelMessages dels)
         (produceDataUpdateMessages dd) (produceContOpMessages co)
 
 -- The following are slightly different (and more internal to the relay), they
@@ -386,11 +398,13 @@ data InboundClientDigest = InboundClientDigest
   , icdPostTypeGets :: Set (Tagged PostDefinition TypeName)
   , icdTypeGets :: Set (Tagged Definition TypeName)
   , icdContainerOps :: ContainerOps
+  , icdDeletes :: Map Path (Maybe Attributee)
   , icdData :: DataDigest
   } deriving (Show, Eq)
 
 inboundClientDigest :: InboundClientDigest
-inboundClientDigest = InboundClientDigest mempty mempty mempty mempty alEmpty
+inboundClientDigest = InboundClientDigest mempty mempty mempty mempty mempty
+  alEmpty
 
 -- -- | This is basically a TrpDigest with the namespace expanded out
 -- data InboundProviderDigest = InboundProviderDigest
@@ -418,28 +432,34 @@ data OutboundClientDigest = OutboundClientDigest
   , ocdPostDefs :: Map (Tagged PostDefinition TypeName) (DefOp PostDefinition)
   , ocdDefinitions :: Map (Tagged Definition TypeName) (DefOp Definition)
   , ocdTypeAssignments :: Map Path (Tagged Definition TypeName, Editable)
+  , ocdDeletes :: Map Path (Maybe Attributee)
   , ocdData :: DataDigest
   , ocdErrors :: Map (ErrorIndex TypeName) [Text]
   } deriving (Show, Eq)
 
 outboundClientDigest :: OutboundClientDigest
-outboundClientDigest = OutboundClientDigest mempty mempty mempty mempty alEmpty
-    mempty
+outboundClientDigest = OutboundClientDigest mempty mempty mempty mempty mempty
+    alEmpty mempty
 
 ocdNull :: OutboundClientDigest -> Bool
-ocdNull (OutboundClientDigest cops postDefs defs tas dd errs) =
-    null cops && null postDefs && null defs && null tas && alNull dd
-    && null errs
+ocdNull (OutboundClientDigest cops postDefs defs tas dels dd errs) =
+    null cops && null postDefs && null defs && null tas && null dels
+    && alNull dd && null errs
 
 type OutboundClientInitialisationDigest = OutboundClientDigest
 
 data OutboundProviderDigest = OutboundProviderDigest
-  { opdContainerOps :: ContainerOps
+  { opdDeletes :: Map Path (Maybe Attributee)
+  , opdContainerOps :: ContainerOps
   , opdData :: DataDigest
   } deriving (Show, Eq)
 
+outboundProviderDigest :: OutboundProviderDigest
+outboundProviderDigest = OutboundProviderDigest mempty mempty alEmpty
+
 opdNull :: OutboundProviderDigest -> Bool
-opdNull (OutboundProviderDigest cops dd) = null cops && alNull dd
+opdNull (OutboundProviderDigest dels cops dd) =
+  null dels && null cops && alNull dd
 
 data OutboundDigest
   = Ocid OutboundClientInitialisationDigest

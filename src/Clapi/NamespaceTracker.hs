@@ -32,10 +32,8 @@ import Clapi.Types (Definition, PostDefinition)
 import Clapi.Types.Path
   (Path, TypeName(..), pattern (:/), pattern Root, Namespace(..))
 import qualified Clapi.Types.Path as Path
-import Clapi.Types.SequenceOps (SequenceOp(..))
 import Clapi.PerClientProto (ClientEvent(..), ServerEvent(..))
 import Clapi.Protocol (Protocol, Directed(..), wait, sendFwd, sendRev)
-import Clapi.Util (flattenNestedMaps)
 
 data Ownership = Owner | Client deriving (Eq, Show)
 
@@ -208,6 +206,7 @@ toInboundClientDigest i trcd =
           (Set.difference tSubs $
             Map.findWithDefault mempty i $ nstTypeRegistrations nsts)
           (trcdContainerOps trcd)
+          (trcdDeletes trcd)
           (trcdData trcd)
     let frcd = frcdEmpty
           { frcdPostTypeUnsubs = Set.intersection ptUnsubs $
@@ -233,19 +232,19 @@ handleDisconnect i = do
 registerSubs
   :: (Ord i, Monad m)
   => i -> OutboundClientInitialisationDigest -> StateT (NstState i) m ()
-registerSubs i (OutboundClientDigest cas postDefs defs _tas dd _errs) =
+registerSubs i (OutboundClientDigest cas postDefs defs _tas dels dd _errs) =
     modify go
   where
-    newDRegsForI = Set.union (Map.keysSet cas) (alKeysSet dd)
+    newDRegsForI = Map.keysSet cas <> Map.keysSet dels <> alKeysSet dd
     go (NstState owners ptRegs tRegs dRegs) = NstState owners
       (Map.insertWith (<>) i (Map.keysSet postDefs) ptRegs)
       (Map.insertWith (<>) i (Map.keysSet defs) tRegs)
       (Map.insertWith (<>) i newDRegsForI dRegs)
 
 subResponse :: OutboundClientInitialisationDigest -> FrcDigest
-subResponse (OutboundClientDigest cOps postDefs defs tas dd errs) =
-    FrcDigest postTypesInError typesInError pathsInError postDefs defs tas dd
-    cOps errs
+subResponse (OutboundClientDigest cOps postDefs defs tas dels dd errs) =
+    FrcDigest postTypesInError typesInError pathsInError postDefs defs tas dels
+    dd cOps errs
   where
     (pathsInError, postTypesInError, typesInError) =
         foldl collectError mempty $ Map.keys errs
@@ -287,11 +286,7 @@ unsubDeleted d = do
     isUndefTy defOp = case defOp of
       OpUndefine -> True
       _ -> False
-    allDeletePaths = Map.keys $ flattenNestedMaps (:/) $
-      Map.filter isDeleteCo . fmap snd <$> ocdContainerOps d
-    isDeleteCo co = case co of
-      SoAbsent -> True
-      _ -> False
+    allDeletePaths = Map.keys $ ocdDeletes d
 
 broadcastClientDigest
   :: (Ord i, Monad m)
@@ -325,19 +320,22 @@ dispatchProviderDigest d =
     void $ sequence $ Map.mapWithKey dispatch $ frpdsByNamespace d
 
 frpdsByNamespace :: OutboundProviderDigest -> Map Namespace FrpDigest
-frpdsByNamespace (OutboundProviderDigest contOps dd) =
+frpdsByNamespace (OutboundProviderDigest dels contOps dd) =
   let
+    (_, delsByNs) = nestMapsByKey Path.splitHead dels
     (rootCOps, casByNs) = nestMapsByKey Path.splitHead contOps
     (_, ddByNs) = nestAlByKey Path.splitHead dd
     -- FIXME: whacking the global stuff to everybody isn't quite right - we need
     -- to know who originated the opd?
     -- FIXME: this will need to have some POST data in it at some point!
     posts = mempty
-    f ns contOps' dd' = FrpDigest ns posts  dd' (contOps' <> rootCOps)
+    f ns dels' (contOps', dd') =
+      FrpDigest ns dels' posts dd' (contOps' <> rootCOps)
   in
-    zipMapsWithKey mempty alEmpty f
-      (Map.mapKeys Namespace casByNs)
-      (Map.mapKeys Namespace ddByNs)
+    zipMapsWithKey mempty (mempty, alEmpty) f (Map.mapKeys Namespace delsByNs) $
+      zipMapsWithKey mempty alEmpty (const (,))
+        (Map.mapKeys Namespace casByNs)
+        (Map.mapKeys Namespace ddByNs)
 
 produceFromRelayClientDigest
   :: OutboundClientDigest -> Set Path -> Set (Tagged PostDefinition TypeName)
@@ -345,12 +343,13 @@ produceFromRelayClientDigest
   -> Set Path -> Set (Tagged PostDefinition TypeName)
   -> Set (Tagged Definition TypeName) -> FrcDigest
 produceFromRelayClientDigest
-  (OutboundClientDigest cOps postDefs defs tas dd errs) pUsubs ptUnsubs tUsubs
-  ps ptns tns = FrcDigest
+  (OutboundClientDigest cOps postDefs defs tas dels dd errs) pUsubs ptUnsubs
+  tUsubs ps ptns tns = FrcDigest
     ptUnsubs tUsubs pUsubs
     (Map.restrictKeys postDefs ptns)
     (Map.restrictKeys defs tns)
     (Map.restrictKeys tas ps)
+    (Map.restrictKeys dels ps)
     (alFilterKey (`Set.member` ps) dd)
     (Map.restrictKeys cOps ps)
     (Map.filterWithKey relevantErr errs)

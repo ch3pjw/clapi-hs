@@ -14,14 +14,14 @@ import Clapi.Types
   ( TrDigest(..), TrpDigest(..), FrDigest(..), FrpDigest(..), WireValue(..)
   , TimeStamped(..), Editable(..))
 import Clapi.Types.AssocList (alSingleton, alFromMap, alFmapWithKey, alFromList)
-import Clapi.Types.Base (InterpolationLimit(ILUninterpolated))
+import Clapi.Types.Base (InterpolationLimit(ILUninterpolated), Attributee)
 import Clapi.Types.Definitions (tupleDef, structDef, arrayDef)
 import Clapi.Types.Digests
-  (DefOp(OpDefine), DataChange(..), FrcDigest(..), DataDigest, ContainerOps)
-import Clapi.Types.SequenceOps (SequenceOp(..))
+  (DefOp(OpDefine), DataChange(..), FrcDigest(..), DataDigest)
 import Clapi.Types.Path
   ( Seg, TypeName(..), tTypeName, pattern Root, pattern (:/), pattern (:</)
   , Namespace(..))
+import Clapi.Types.Path (Path)
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Tree (TreeType(..), unbounded)
 import Clapi.Types.Wire (castWireValue)
@@ -82,6 +82,7 @@ relayApiProto selfAddr =
           , ([segq|owners|], (tTypeName rns [segq|owners|], ReadOnly))
           , ([segq|self|], (tTypeName rns [segq|self|], ReadOnly))])
         ])
+      mempty
       (alFromList
         [ ([pathq|/build|], ConstChange Nothing [WireValue @Text "banana"])
         , ([pathq|/self|], ConstChange Nothing [
@@ -141,13 +142,12 @@ relayApiProto selfAddr =
             timingMap' = Map.delete cSeg timingMap
             -- FIXME: This feels a bit like reimplementing some of the NST
             ownerMap' = Map.filter (/= cSeg) ownerMap
-            (dd, cops) = ownerChangeInfo ownerMap'
+            (dd, dels) = ownerChangeInfo ownerMap'
           in do
-            pubUpdate dd $ Map.insert [pathq|/clients|]
-              (Map.singleton cSeg (Nothing, SoAbsent)) cops
+            pubUpdate dd $ Map.insert ([pathq|/clients|] :/ cSeg) Nothing dels
             steadyState timingMap' ownerMap'
-        pubUpdate dd co = sendFwd $ ClientData selfAddr $ Trpd $ TrpDigest
-          rns mempty mempty dd co mempty
+        pubUpdate dd dels = sendFwd $ ClientData selfAddr $ Trpd $ TrpDigest
+          rns mempty mempty dels dd mempty mempty
         rev (Left ownerAddrs) = do
           let ownerMap' = pathNameFor <$> ownerAddrs
           if elem selfAddr $ Map.elems ownerAddrs
@@ -170,13 +170,14 @@ relayApiProto selfAddr =
                 _ -> sendRev se
             _ -> sendRev se
           steadyState timingMap ownerMap
-        ownerChangeInfo :: Map Namespace Seg -> (DataDigest, ContainerOps)
+        ownerChangeInfo
+          :: Map Namespace Seg -> (DataDigest, Map Path (Maybe Attributee))
         ownerChangeInfo ownerMap' =
             ( alFromMap $ Map.mapKeys toOwnerPath $ toSetRefOp <$> ownerMap'
-            , Map.singleton [pathq|/owners|] $
-                (const (Nothing, SoAbsent)) <$>
-                  Map.mapKeys unNamespace (ownerMap `Map.difference` ownerMap'))
-        toOwnerPath :: Namespace -> Path.Path
+            , Map.mapKeys (([pathq|/owners|] :/) . unNamespace) $
+                const Nothing <$>
+                ownerMap `Map.difference` ownerMap')
+        toOwnerPath :: Namespace -> Path
         toOwnerPath s = [pathq|/owners|] :/ unNamespace s
         toSetRefOp ns = ConstChange Nothing [
           WireValue $ Path.toText $ Root :/ selfSeg :/ [segq|clients|] :/ ns]
@@ -199,6 +200,6 @@ relayApiProto selfAddr =
         -- This function trusts that the valuespace has completely validated the
         -- actions the client can perform (i.e. can only change the name of a
         -- client)
-        handleApiRequest (FrpDigest ns posts dd cops) =
+        handleApiRequest (FrpDigest ns dels posts dd cops) =
           sendFwd $ ClientData selfAddr $ Trpd $
-          TrpDigest ns mempty mempty dd cops mempty
+          TrpDigest ns mempty mempty dels dd cops mempty
