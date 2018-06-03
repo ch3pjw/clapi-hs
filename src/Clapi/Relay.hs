@@ -29,7 +29,7 @@ import Clapi.Types.Digests
   , InboundClientDigest(..), OutboundProviderDigest(..)
   , DataDigest, ContainerOps)
 import Clapi.Types.Path
-  ( Seg, Path, TypeName(..), qualify,  pattern (:</), pattern Root, pattern (:/)
+  ( Seg, Path, TypeName, qualify,  pattern (:</), pattern Root, pattern (:/)
   , parentPath , Namespace(..))
 import Clapi.Types.Definitions (Editable, Definition, PostDefinition)
 import Clapi.Types.Wire (WireValue)

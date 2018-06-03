@@ -54,7 +54,7 @@ import Clapi.Types.Digests
   , TrpDigest(..), trpdRemovedPaths)
 import Clapi.Types.Messages (ErrorIndex(..))
 import Clapi.Types.Path
-  ( Seg, Path, pattern (:/), pattern Root, pattern (:</), TypeName(..)
+  ( Seg, Path, pattern (:/), pattern Root, pattern (:</), TypeName, typeName
   , tTypeName, qualify, unqualify, tTnNamespace, Namespace(..))
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Tree (TreeType(..), unbounded)
@@ -95,13 +95,13 @@ apiNs :: Namespace
 apiNs = Namespace [segq|api|]
 
 rootTypeName, apiTypeName :: Tagged Definition TypeName
-rootTypeName = Tagged $ TypeName apiNs [segq|root|]
-apiTypeName = Tagged $ TypeName apiNs $ unNamespace apiNs
+rootTypeName = Tagged $ typeName apiNs [segq|root|]
+apiTypeName = Tagged $ typeName apiNs $ unNamespace apiNs
 
 apiDef :: StructDefinition
 apiDef = StructDefinition "Information about CLAPI itself" $
   alSingleton [segq|version|]
-  (Tagged $ TypeName apiNs [segq|version|], ReadOnly)
+  (Tagged $ typeName apiNs [segq|version|], ReadOnly)
 
 versionDef :: TupleDefinition
 versionDef = TupleDefinition "The version of CLAPI" (unsafeMkAssocList

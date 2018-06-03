@@ -1,6 +1,3 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE DeriveLift #-}
 
 module Clapi.Types.Path (
@@ -10,9 +7,9 @@ module Clapi.Types.Path (
     pattern Root, pattern (:</), pattern (:/),
     isParentOf, isChildOf, isParentOfAny, isChildOfAny, childPaths,
     NodePath, TypePath,
-    Namespace(..),
-    TypeName(..), tTypeName, tTnNamespace, tTnName, qualify, unqualify,
-    typeNameP, typeNameToText, typeNameFromText) where
+    Namespace(..), Qualified(..),
+    TypeName, typeName, tTypeName, tTnNamespace, tTnName, qualify, unqualify,
+    ) where
 
 import Prelude hiding (fail)
 import qualified Data.Attoparsec.Text as DAT
@@ -109,40 +106,37 @@ type NodePath = Path
 type TypePath = Path
 
 newtype Namespace = Namespace {unNamespace :: Seg} deriving (Show, Eq, Ord)
-data TypeName
-  = TypeName {tnNamespace :: Namespace, tnName :: Seg} deriving (Eq, Ord)
+
+data Qualified a
+  = Qualified
+  { qualifiedNs :: Namespace
+  , unQualified :: a}
+  deriving (Show, Eq, Ord)
+type TypeName = Qualified Seg
+
+typeName :: Namespace -> Seg -> TypeName
+typeName = Qualified
+
+tnNamespace :: TypeName -> Namespace
+tnNamespace = qualifiedNs
+
+tnName :: TypeName -> Seg
+tnName = unQualified
 
 qualify :: Namespace -> Tagged a Seg -> Tagged a TypeName
-qualify ns (Tagged s) = Tagged $ TypeName ns s
+qualify ns (Tagged s) = Tagged $ typeName ns s
 
 unqualify :: Tagged a TypeName -> (Namespace, Tagged a Seg)
-unqualify (Tagged (TypeName ns s)) = (ns, Tagged s)
+unqualify (Tagged (Qualified ns s)) = (ns, Tagged s)
 
 tTypeName :: Namespace -> Seg -> Tagged a TypeName
-tTypeName ns s = Tagged $ TypeName ns s
+tTypeName ns s = Tagged $ typeName ns s
 
 tTnNamespace :: Tagged a TypeName -> Namespace
 tTnNamespace = tnNamespace . unTagged
 
 tTnName :: Tagged a TypeName -> Tagged a Seg
 tTnName = Tagged . tnName . unTagged
-
-qualSepChar :: Char
-qualSepChar = ':'
-
-typeNameToText :: TypeName -> Text
-typeNameToText (TypeName ns s) =
-  unSeg (unNamespace ns) <> Text.singleton qualSepChar <> unSeg s
-
-instance Show TypeName where
-  show = Text.unpack . typeNameToText
-
-typeNameP :: Parser TypeName
-typeNameP = TypeName <$> (Namespace <$> segP) <*> (DAT.char qualSepChar >> segP)
-
-typeNameFromText :: MonadFail m => Text -> m TypeName
-typeNameFromText =
-  either fail return . DAT.parseOnly (typeNameP <* DAT.endOfInput)
 
 parentPath :: Path -> Maybe Path
 parentPath p = case p of

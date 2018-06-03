@@ -9,7 +9,7 @@ import Data.Word (Word32)
 import Clapi.Types.Base (Attributee, Time, Interpolation)
 import Clapi.Types.Definitions (Definition, Editable, PostDefinition)
 import Clapi.Types.Path
-  (Seg, Path, TypeName(..), qualify, unqualify, pattern (:</), Namespace(..))
+  (Seg, Path, TypeName, qualify, unqualify, pattern (:</), Namespace(..))
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Wire (WireValue)
 

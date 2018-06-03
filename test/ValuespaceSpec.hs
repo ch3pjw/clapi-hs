@@ -25,7 +25,7 @@ import Clapi.Types
   , TrpDigest(..), trpDigest, DefOp(..), DataChange(..))
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Path
-  ( Path(..), pattern (:/), pattern Root, Seg, TypeName(..), tTypeName
+  ( Path(..), pattern (:/), pattern Root, Seg, TypeName, typeName, tTypeName
   , Namespace(..))
 import Clapi.Valuespace
   ( Valuespace(..), validateVs, baseValuespace, processToRelayProviderDigest
@@ -92,7 +92,7 @@ vsWithXRef =
     newNodeDef = tupleDef
       "for test"
       (alSingleton [segq|daRef|] $ TtRef $
-        TypeName (Namespace [segq|api|]) [segq|version|])
+        typeName (Namespace [segq|api|]) [segq|version|])
       ILUninterpolated
     newVal = ConstChange Nothing [WireValue $ Path.toText [pathq|/api/version|]]
   in extendedVs newNodeDef refSeg newVal

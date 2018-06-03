@@ -30,7 +30,7 @@ import Clapi.Types.Digests
 -- Also `Either String a` MonadFail instance:
 import Clapi.Types (Definition, PostDefinition)
 import Clapi.Types.Path
-  (Path, TypeName(..), pattern (:/), pattern Root, Namespace(..))
+  (Path, TypeName, pattern (:/), pattern Root, Namespace(..))
 import qualified Clapi.Types.Path as Path
 import Clapi.PerClientProto (ClientEvent(..), ServerEvent(..))
 import Clapi.Protocol (Protocol, Directed(..), wait, sendFwd, sendRev)

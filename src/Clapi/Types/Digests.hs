@@ -17,7 +17,7 @@ import Clapi.Types.Base (Attributee, Time, Interpolation)
 import Clapi.Types.Definitions (Definition, Editable, PostDefinition)
 import Clapi.Types.Messages
 import Clapi.Types.Path
-  ( Seg, Path, TypeName(..), tTnNamespace, pattern (:</), Namespace(..))
+  ( Seg, Path, TypeName, typeName, tTnNamespace, pattern (:</), Namespace(..))
 import Clapi.Types.Wire (WireValue)
 
 data SubOp = OpSubscribe | OpUnsubscribe deriving (Show, Eq)
@@ -186,8 +186,8 @@ produceContOpMessages = mconcat . Map.elems . Map.mapWithKey
 
 qualifyDefMessage :: Namespace -> DefMessage Seg def -> DefMessage TypeName def
 qualifyDefMessage ns dm = case dm of
-  MsgDefine s d -> MsgDefine (TypeName ns s) d
-  MsgUndefine s -> MsgUndefine $ TypeName ns s
+  MsgDefine s d -> MsgDefine (typeName ns s) d
+  MsgUndefine s -> MsgUndefine $ typeName ns s
 
 digestDefMessages
   :: Ord a => [DefMessage (Tagged def a) def] -> Map (Tagged def a) (DefOp def)

@@ -27,7 +27,7 @@ import Clapi.Types.Digests
   , OutboundProviderDigest(..), outboundProviderDigest, frpDigest
   , SubOp(..), DefOp(..))
 import Clapi.Types.Path
-  ( Path, Seg, pattern Root, pattern (:/), TypeName(..), tTypeName
+  ( Path, Seg, pattern Root, pattern (:/), TypeName, typeName, tTypeName
   , Namespace(..))
 import Clapi.Types.AssocList (alSingleton, alEmpty, alFromList)
 import Clapi.PerClientProto (ClientEvent(..), ServerEvent(..))
@@ -291,4 +291,4 @@ spec = do
     subHello addr = sendFwd $ ClientData addr $ Trcd $ trcdEmpty
       {trcdDataSubs = Map.singleton helloP OpSubscribe}
     textChange s = ConstChange Nothing [WireValue (s :: T.Text)]
-    helloTn = TypeName (Namespace helloS) helloS
+    helloTn = typeName (Namespace helloS) helloS

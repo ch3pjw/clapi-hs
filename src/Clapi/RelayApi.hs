@@ -19,8 +19,8 @@ import Clapi.Types.Definitions (tupleDef, structDef, arrayDef)
 import Clapi.Types.Digests
   (DefOp(OpDefine), DataChange(..), FrcDigest(..), DataDigest)
 import Clapi.Types.Path
-  ( Seg, TypeName(..), tTypeName, pattern Root, pattern (:/), pattern (:</)
-  , Namespace(..))
+  ( Seg, typeName, tTypeName, pattern Root, pattern (:/)
+  , pattern (:</), Namespace(..))
 import Clapi.Types.Path (Path)
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Tree (TreeType(..), unbounded)
@@ -67,14 +67,14 @@ relayApiProto selfAddr =
         , ([segq|owner_info|], tupleDef "owner info"
              (alSingleton [segq|owner|]
                -- FIXME: want to make Ref's TypeName tagged...
-               $ TtRef $ TypeName rns [segq|client_info|])
+               $ TtRef $ typeName rns [segq|client_info|])
              ILUninterpolated)
         , ([segq|owners|], arrayDef "ownersdoc"
              Nothing
              (tTypeName rns [segq|owner_info|]) ReadOnly)
         , ([segq|self|], tupleDef "Which client you are"
              (alSingleton [segq|info|]
-               $ TtRef $ TypeName rns [segq|client_info|])
+               $ TtRef $ typeName rns [segq|client_info|])
              ILUninterpolated)
         , ([segq|relay|], structDef "topdoc" $ staticAl
           [ ([segq|build|], (tTypeName rns [segq|build|], ReadOnly))

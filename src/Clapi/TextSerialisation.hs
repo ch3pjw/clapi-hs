@@ -15,9 +15,18 @@ import Data.Scientific (toRealFloat)
 import Clapi.Types.Tree
   ( Bounds, bounds, unbounded, boundsMin, boundsMax
   , typeEnumOf, TreeType(..), TreeTypeName(..))
-import Clapi.Types.Path (segP, unSeg)
-import qualified Clapi.Types.Path as Path
+import Clapi.Types.Path (segP, unSeg, Namespace(..), Qualified(..), TypeName)
 
+qualSepChar :: Char
+qualSepChar = ':'
+
+typeNameToText :: TypeName -> Text
+typeNameToText (Qualified ns s) =
+  unSeg (unNamespace ns) <> Text.singleton qualSepChar <> unSeg s
+
+typeNameP :: Parser TypeName
+typeNameP = Qualified
+  <$> (Namespace <$> segP) <*> (Dat.char qualSepChar >> segP)
 
 argsOpen, argsClose, boundsSep, listSep :: Char
 argsOpen = '['
@@ -86,7 +95,7 @@ ttToText tt = (ttNameToText $ typeEnumOf tt) <> bracketNotNull bracketContent
       TtFloat b -> boundsToText b
       TtDouble b -> boundsToText b
       TtString r -> r
-      TtRef tn -> Path.typeNameToText tn
+      TtRef tn -> typeNameToText tn
       TtList tt' -> ttToText tt'
       TtSet tt' -> ttToText tt'
       TtOrdSet tt' -> ttToText tt'
@@ -119,7 +128,7 @@ ttParser' = ttNameParser >>= argsParser
       TtnFloat -> TtFloat <$> bbp (toRealFloat <$> Dat.scientific)
       TtnDouble -> TtDouble <$> bbp (toRealFloat <$> Dat.scientific)
       TtnString -> TtString <$> optionalBracket "" regex
-      TtnRef -> TtRef <$> bracketed Path.typeNameP
+      TtnRef -> TtRef <$> bracketed typeNameP
       TtnList -> bracketed $ TtList <$> ttParser'
       TtnSet -> bracketed $ TtSet <$> ttParser'
       TtnOrdSet -> bracketed $ TtOrdSet <$> ttParser'
