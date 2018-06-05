@@ -6,10 +6,11 @@ import Data.Text (Text)
 import Data.Either (isLeft)
 
 import Clapi.TH (pathq, segq)
-import Clapi.Types (CanFail)
 import Clapi.Types.Path
   ( Path(..), pattern Root, pattern (:/), pattern (:</), fromText, toText
   , isChildOf, joinSegs)
+
+type CanFail a = Either String a
 
 
 spec :: Spec

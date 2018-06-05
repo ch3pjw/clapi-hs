@@ -2,8 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 
 module Clapi.Types
-  ( CanFail
-  , module X
+  ( module X
   ) where
 
 import Prelude hiding (fail)
@@ -18,8 +17,6 @@ import Clapi.Types.UniqList as X
 import Clapi.Types.Wire as X
 import Clapi.Types.Messages as X
 import Clapi.Types.Tree as X
-
-type CanFail a = Either String a
 
 instance MonadFail (Either String) where
     fail s = Left s
