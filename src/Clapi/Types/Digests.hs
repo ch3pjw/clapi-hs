@@ -1,3 +1,7 @@
+{-# LANGUAGE
+    DataKinds
+  , KindSignatures
+#-}
 module Clapi.Types.Digests where
 
 import Data.Foldable (foldl')
@@ -17,7 +21,8 @@ import Clapi.Types.Base (Attributee, Time, Interpolation)
 import Clapi.Types.Definitions (Definition, Editable, PostDefinition)
 import Clapi.Types.Messages
 import Clapi.Types.Path
-  ( Seg, Path, TypeName, typeName, tTnNamespace, pattern (:</), Namespace(..))
+  ( Seg, Path, TypeName, typeName, tTnNamespace, Namespace(..), AbsRel(..)
+  , splitHead, mkAbsPath)
 import Clapi.Types.Wire (WireValue)
 
 data SubOp = OpSubscribe | OpUnsubscribe deriving (Show, Eq)
@@ -38,9 +43,9 @@ data DataChange
   = ConstChange (Maybe Attributee) [WireValue]
   | TimeChange (Map Word32 (Maybe Attributee, TimeSeriesDataOp))
   deriving (Show, Eq)
-type DataDigest = AssocList Path DataChange
+type DataDigest (ar :: AbsRel) = AssocList (Path ar) DataChange
 
-type ContainerOps = Map Path (Map Seg (Maybe Attributee, Maybe Seg))
+type ContainerOps ar = Map (Path ar) (Map Seg (Maybe Attributee, Maybe Seg))
 
 newtype PostOp = OpPost {opArgs :: Map Seg WireValue} deriving (Show, Eq)
 
@@ -48,18 +53,18 @@ data TrpDigest = TrpDigest
   { trpdNamespace :: Namespace
   , trpdPostDefs :: Map (Tagged PostDefinition Seg) (DefOp PostDefinition)
   , trpdDefinitions :: Map (Tagged Definition Seg) (DefOp Definition)
-  , trpdDeletes :: Map Path (Maybe Attributee)
-  , trpdData :: DataDigest
-  , trpdContainerOps :: ContainerOps
+  , trpdDeletes :: Map (Path 'Rel) (Maybe Attributee)
+  , trpdData :: DataDigest 'Rel
+  , trpdContainerOps :: ContainerOps 'Rel
   , trpdErrors :: Map (ErrorIndex Seg) [Text]
   } deriving (Show, Eq)
 
 trpDigest :: Namespace -> TrpDigest
 trpDigest ns = TrpDigest ns mempty mempty mempty alEmpty mempty mempty
 
-trpdRemovedPaths :: TrpDigest -> [Path]
+trpdRemovedPaths :: TrpDigest -> [Path 'Abs]
 trpdRemovedPaths trpd =
-    ((unNamespace $ trpdNamespace trpd) :</) <$> Map.keys (trpdDeletes trpd)
+    mkAbsPath (trpdNamespace trpd) <$> Map.keys (trpdDeletes trpd)
 
 trpdNull :: TrpDigest -> Bool
 trpdNull (TrpDigest _ns postDefs defs dels dd cops errs) =
@@ -67,10 +72,10 @@ trpdNull (TrpDigest _ns postDefs defs dels dd cops errs) =
 
 data FrpDigest = FrpDigest
   { frpdNamespace :: Namespace
-  , frpdDeletes :: Map Path (Maybe Attributee)
-  , frpdPosts :: Map (Path, Seg) PostOp
-  , frpdData :: DataDigest
-  , frpdContainerOps :: ContainerOps
+  , frpdDeletes :: Map (Path 'Rel) (Maybe Attributee)
+  , frpdPosts :: Map (Path 'Rel, Seg) PostOp
+  , frpdData :: DataDigest 'Rel
+  , frpdContainerOps :: ContainerOps 'Rel
   } deriving (Show, Eq)
 
 frpDigest :: Namespace -> FrpDigest
@@ -83,11 +88,11 @@ data FrpErrorDigest = FrpErrorDigest
 data TrcDigest = TrcDigest
   { trcdPostTypeSubs :: Map (Tagged PostDefinition TypeName) SubOp
   , trcdTypeSubs :: Map (Tagged Definition TypeName) SubOp
-  , trcdDataSubs :: Map Path SubOp
-  , trcdDeletes :: Map Path (Maybe Attributee)
-  , trcdPosts :: Map (Path, Seg) PostOp
-  , trcdData :: DataDigest
-  , trcdContainerOps :: ContainerOps
+  , trcdDataSubs :: Map (Path 'Abs) SubOp
+  , trcdDeletes :: Map (Path 'Abs) (Maybe Attributee)
+  , trcdPosts :: Map (Path 'Abs, Seg) PostOp
+  , trcdData :: DataDigest 'Abs
+  , trcdContainerOps :: ContainerOps 'Abs
   } deriving (Show, Eq)
 
 trcdEmpty :: TrcDigest
@@ -96,13 +101,13 @@ trcdEmpty = TrcDigest mempty mempty mempty mempty mempty alEmpty mempty
 data FrcDigest = FrcDigest
   { frcdPostTypeUnsubs :: Set (Tagged PostDefinition TypeName)
   , frcdTypeUnsubs :: Set (Tagged Definition TypeName)
-  , frcdDataUnsubs :: Set Path
+  , frcdDataUnsubs :: Set (Path 'Abs)
   , frcdPostDefs :: Map (Tagged PostDefinition TypeName) (DefOp PostDefinition)
   , frcdDefinitions :: Map (Tagged Definition TypeName) (DefOp Definition)
-  , frcdTypeAssignments :: Map Path (Tagged Definition TypeName, Editable)
-  , frcdDeletes :: Map Path (Maybe Attributee)
-  , frcdData :: DataDigest
-  , frcdContainerOps :: ContainerOps
+  , frcdTypeAssignments :: Map (Path 'Abs) (Tagged Definition TypeName, Editable)
+  , frcdDeletes :: Map (Path 'Abs) (Maybe Attributee)
+  , frcdData :: DataDigest 'Abs
+  , frcdContainerOps :: ContainerOps 'Abs
   , frcdErrors :: Map (ErrorIndex TypeName) [Text]
   } deriving (Show, Eq)
 
@@ -137,8 +142,7 @@ trcdNamespaces (TrcDigest pts ts ds dels posts dd co) =
   where
     pathKeyNss = onlyJusts . Set.map pNs
     onlyJusts = Set.map fromJust . Set.delete Nothing
-    pNs (ns :</ _) = Just $ Namespace ns
-    pNs _ = Nothing
+    pNs p = Namespace . fst <$> splitHead p
 
 frcdNull :: FrcDigest -> Bool
 frcdNull (FrcDigest pTyUns tyUns datUns postDefs defs tas dels dd cops errs) =
@@ -152,7 +156,7 @@ splitMap = foldl mush mempty
     mush m (a, bc) = Map.alter (mush' bc) a m
     mush' (b, c) = Just . Map.insert b c . maybe mempty id
 
-digestDataUpdateMessages :: [DataUpdateMessage] -> DataDigest
+digestDataUpdateMessages :: [DataUpdateMessage ar] -> DataDigest ar
 digestDataUpdateMessages = alFromList . fmap procMsg
   where
     procMsg msg = case msg of
@@ -162,22 +166,22 @@ digestDataUpdateMessages = alFromList . fmap procMsg
       MsgRemove np uuid att ->
         (np, TimeChange (Map.singleton uuid (att, OpRemove)))
 
-produceDataUpdateMessages :: DataDigest -> [DataUpdateMessage]
+produceDataUpdateMessages :: DataDigest ar -> [DataUpdateMessage ar]
 produceDataUpdateMessages = mconcat . alValues . alFmapWithKey procDc
   where
-    procDc :: Path -> DataChange -> [DataUpdateMessage]
+    procDc :: Path ar -> DataChange -> [DataUpdateMessage ar]
     procDc p dc = case dc of
       ConstChange att wvs -> [MsgConstSet p wvs att]
       TimeChange m -> Map.foldlWithKey (\msgs tpid (att, op) -> (case op of
         OpSet t wvs i -> MsgSet p tpid t wvs i att
         OpRemove -> MsgRemove p tpid att) : msgs) [] m
 
-digestContOpMessages :: [ContainerUpdateMessage] -> ContainerOps
+digestContOpMessages :: [ContainerUpdateMessage ar] -> ContainerOps ar
 digestContOpMessages = splitMap . fmap procMsg
   where
     procMsg (MsgMoveAfter p targ ref att) = (p, (targ, (att, ref)))
 
-produceContOpMessages :: ContainerOps -> [ContainerUpdateMessage]
+produceContOpMessages :: ContainerOps ar -> [ContainerUpdateMessage ar]
 produceContOpMessages = mconcat . Map.elems . Map.mapWithKey
     (\p -> Map.elems . Map.mapWithKey (procCo p))
   where
@@ -208,7 +212,7 @@ digestSubMessages
   :: [SubMessage]
   -> ( Map (Tagged PostDefinition TypeName) SubOp
      , Map (Tagged Definition TypeName) SubOp
-     , Map Path SubOp)
+     , Map (Path 'Abs) SubOp)
 digestSubMessages msgs = foldl' procMsg mempty msgs
   where
     procMsg (post, ty, dat) msg = case msg of
@@ -222,7 +226,7 @@ digestSubMessages msgs = foldl' procMsg mempty msgs
 produceSubMessages
   :: Map (Tagged PostDefinition TypeName) SubOp
   -> Map (Tagged Definition TypeName) SubOp
-  -> Map Path SubOp -> [SubMessage]
+  -> Map (Path 'Abs) SubOp -> [SubMessage]
 produceSubMessages pTySubs tySubs datSubs =
     pTySubMsgs ++ tySubMsgs ++ datSubMsgs
   where
@@ -238,13 +242,13 @@ produceSubMessages pTySubs tySubs datSubs =
 
 
 digestTypeMessages
-  :: [TypeMessage] -> Map Path (Tagged Definition TypeName, Editable)
+  :: [TypeMessage] -> Map (Path 'Abs) (Tagged Definition TypeName, Editable)
 digestTypeMessages = Map.fromList . fmap procMsg
   where
     procMsg (MsgAssignType p tn lib) = (p, (tn, lib))
 
 produceTypeMessages
-  :: Map Path (Tagged Definition TypeName, Editable) -> [TypeMessage]
+  :: Map (Path 'Abs) (Tagged Definition TypeName, Editable) -> [TypeMessage]
 produceTypeMessages = Map.elems . Map.mapWithKey
   (\p (tn, l) -> MsgAssignType p tn l)
 
@@ -257,20 +261,20 @@ produceErrMessages :: Map (ErrorIndex a) [Text] -> [MsgError a]
 produceErrMessages =
   mconcat . Map.elems . Map.mapWithKey (\ei errs -> MsgError ei <$> errs)
 
-digestPostMessages :: [PostMessage] -> Map (Path, Seg) PostOp
+digestPostMessages :: [PostMessage ar] -> Map (Path ar, Seg) PostOp
 digestPostMessages = Map.fromList . fmap pmToPo
   where
     pmToPo (MsgPost path s args) = ((path, s), OpPost args)
 
-producePostMessages :: Map (Path, Seg) PostOp -> [PostMessage]
+producePostMessages :: Map (Path ar, Seg) PostOp -> [PostMessage ar]
 producePostMessages = fmap (uncurry poToPm) . Map.toList
   where
     poToPm (p, s) (OpPost args) = MsgPost p s args
 
-digestDelMessages :: [DeleteMessage] -> Map Path (Maybe Attributee)
+digestDelMessages :: [DeleteMessage ar] -> Map (Path ar) (Maybe Attributee)
 digestDelMessages = Map.fromList . fmap (\(MsgDelete p att) -> (p, att))
 
-produceDelMessages :: Map Path (Maybe Attributee) -> [DeleteMessage]
+produceDelMessages :: Map (Path ar) (Maybe Attributee) -> [DeleteMessage ar]
 produceDelMessages = fmap (uncurry MsgDelete) . Map.toList
 
 digestToRelayBundle :: ToRelayBundle -> TrDigest
@@ -394,12 +398,12 @@ produceFromRelayBundle frd = case frd of
 -- are not neccessarily intended for a single recipient
 
 data InboundClientDigest = InboundClientDigest
-  { icdGets :: Set Path
+  { icdGets :: Set (Path 'Abs)
   , icdPostTypeGets :: Set (Tagged PostDefinition TypeName)
   , icdTypeGets :: Set (Tagged Definition TypeName)
-  , icdContainerOps :: ContainerOps
-  , icdDeletes :: Map Path (Maybe Attributee)
-  , icdData :: DataDigest
+  , icdContainerOps :: ContainerOps 'Abs
+  , icdDeletes :: Map (Path 'Abs) (Maybe Attributee)
+  , icdData :: DataDigest 'Abs
   } deriving (Show, Eq)
 
 inboundClientDigest :: InboundClientDigest
@@ -428,12 +432,12 @@ data InboundDigest
   deriving (Show, Eq)
 
 data OutboundClientDigest = OutboundClientDigest
-  { ocdContainerOps :: ContainerOps
+  { ocdContainerOps :: ContainerOps 'Abs
   , ocdPostDefs :: Map (Tagged PostDefinition TypeName) (DefOp PostDefinition)
   , ocdDefinitions :: Map (Tagged Definition TypeName) (DefOp Definition)
-  , ocdTypeAssignments :: Map Path (Tagged Definition TypeName, Editable)
-  , ocdDeletes :: Map Path (Maybe Attributee)
-  , ocdData :: DataDigest
+  , ocdTypeAssignments :: Map (Path 'Abs) (Tagged Definition TypeName, Editable)
+  , ocdDeletes :: Map (Path 'Abs) (Maybe Attributee)
+  , ocdData :: DataDigest 'Abs
   , ocdErrors :: Map (ErrorIndex TypeName) [Text]
   } deriving (Show, Eq)
 
@@ -449,9 +453,9 @@ ocdNull (OutboundClientDigest cops postDefs defs tas dels dd errs) =
 type OutboundClientInitialisationDigest = OutboundClientDigest
 
 data OutboundProviderDigest = OutboundProviderDigest
-  { opdDeletes :: Map Path (Maybe Attributee)
-  , opdContainerOps :: ContainerOps
-  , opdData :: DataDigest
+  { opdDeletes :: Map (Path 'Abs) (Maybe Attributee)
+  , opdContainerOps :: ContainerOps 'Abs
+  , opdData :: DataDigest 'Abs
   } deriving (Show, Eq)
 
 outboundProviderDigest :: OutboundProviderDigest

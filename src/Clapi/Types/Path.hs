@@ -1,12 +1,16 @@
-{-# LANGUAGE DeriveLift #-}
+{-# LANGUAGE
+    DataKinds
+  , DeriveLift
+  , KindSignatures
+#-}
 
 module Clapi.Types.Path (
-    Path(..), Seg, mkSeg, unSeg, joinSegs,
+    Path(..), AbsRel(..), Seg, mkSeg, unSeg, joinSegs,
+    mkAbsPath,
     pathP, segP, toText, fromText,
     splitHead, splitTail, parentPath,
-    pattern Root, pattern (:</), pattern (:/),
+    pattern Root, pattern (:/), -- pattern (:</),
     isParentOf, isChildOf, isParentOfAny, isChildOfAny, childPaths,
-    NodePath, TypePath,
     Namespace(..), Qualified(..),
     TypeName, typeName, tTypeName, tTnNamespace, tTnName, qualify, unqualify,
     ) where
@@ -38,10 +42,19 @@ segP = fmap (Seg . Text.pack) $ DAT.many1 $ DAT.satisfy isValidSegChar
 mkSeg :: MonadFail m => Text -> m Seg
 mkSeg = either fail return . DAT.parseOnly (segP <* DAT.endOfInput)
 
+-- FIXME: We reckon this is a semigroup <>
 joinSegs :: [Seg] -> Seg
 joinSegs = Seg . Text.intercalate (Text.singleton '_') . fmap unSeg
 
-newtype Path = Path {unPath :: [Seg]} deriving (Eq, Ord, Lift)
+data AbsRel = Abs | Rel
+
+newtype Path (a :: AbsRel) = Path {unPath :: [Seg]} deriving (Eq, Ord, Lift)
+
+mkAbsPath :: Namespace -> Path 'Rel -> Path 'Abs
+mkAbsPath ns (Path segs) = Path $ unNamespace ns : segs
+
+-- -- You can't really write this, which is hmm...
+-- pathNs :: Path 'Abs -> Maybe (Namespace, Path 'Rel)
 
 sepChar :: Char
 sepChar = '/'
@@ -49,24 +62,25 @@ sepChar = '/'
 sepText :: Text
 sepText = Text.singleton sepChar
 
-instance Show Path where
+instance Show (Path a) where
     show = Text.unpack . toText
 
-toText :: Path -> Text
+toText :: Path a -> Text
 toText (Path segs) = sepText <> Text.intercalate sepText (fmap unSeg segs)
 
-pattern Root :: Path
+-- FIXME: not ROot because Rel is a thing...
+pattern Root :: Path a
 pattern Root = Path []
 
-splitHead :: Path -> Maybe (Seg, Path)
+splitHead :: Path a -> Maybe (Seg, Path 'Rel)
 splitHead (Path []) = Nothing
 splitHead (Path (seg:segs)) = Just (seg, Path segs)
 
-pattern (:</) :: Seg -> Path -> Path
-pattern seg :</ path <- (splitHead -> Just (seg, path)) where
-    seg :</ path = Path $ seg : unPath path
+-- pattern (:</) :: Seg -> Path -> Path
+-- pattern seg :</ path <- (splitHead -> Just (seg, path)) where
+--     seg :</ path = Path $ seg : unPath path
 
-splitTail :: Path -> Maybe (Path, Seg)
+splitTail :: Path a -> Maybe (Path a, Seg)
 splitTail (Path path) = case path of
     (y : xs) -> (\(s, ps) -> Just (Path ps, s)) $ go y xs
     [] -> Nothing
@@ -76,34 +90,33 @@ splitTail (Path path) = case path of
         [] -> (y, [])
         (z : zs) -> (y :) <$> go z zs
 
-pattern (:/) :: Path -> Seg -> Path
+pattern (:/) :: Path a -> Seg -> Path a
 pattern path :/ seg <- (splitTail -> Just (path, seg)) where
     path :/ seg = Path $ unPath path ++ [seg]
 
-pathP :: Parser Path
+pathP :: Parser (Path a)
 pathP = let sepP = DAT.char sepChar in
     fmap Path $ sepP >> segP `DAT.sepBy` sepP
 
-fromText :: MonadFail m => Text -> m Path
+-- FIXME: This should potentially be two different parsers one for Path Abs that
+-- includes the leading slash and one for Path Rel that forbids it.
+fromText :: MonadFail m => Text -> m (Path a)
 fromText = either fail return . DAT.parseOnly (pathP <* DAT.endOfInput)
 
-isParentOf :: Path -> Path -> Bool
+isParentOf :: Path a -> Path a -> Bool
 isParentOf (Path a) (Path b) = isPrefixOf a b
 
-isChildOf :: Path -> Path -> Bool
+isChildOf :: Path a -> Path a -> Bool
 isChildOf = flip isParentOf
 
-isParentOfAny :: (Functor f, Foldable f) => Path -> f Path -> Bool
+isParentOfAny :: (Functor f, Foldable f) => Path a -> f (Path a) -> Bool
 isParentOfAny parent candidates = or $ isParentOf parent <$> candidates
 
-isChildOfAny :: (Functor f, Foldable f) => Path -> f Path -> Bool
+isChildOfAny :: (Functor f, Foldable f) => Path a -> f (Path a) -> Bool
 isChildOfAny candidateChild parents = or $ isChildOf candidateChild <$> parents
 
-childPaths :: Functor f => Path -> f Seg -> f Path
+childPaths :: Functor f => Path a -> f Seg -> f (Path a)
 childPaths (Path segs) ss = Path . (segs ++) . pure <$> ss
-
-type NodePath = Path
-type TypePath = Path
 
 newtype Namespace = Namespace {unNamespace :: Seg} deriving (Show, Eq, Ord)
 
@@ -138,7 +151,7 @@ tTnNamespace = tnNamespace . unTagged
 tTnName :: Tagged a TypeName -> Tagged a Seg
 tTnName = Tagged . tnName . unTagged
 
-parentPath :: Path -> Maybe Path
+parentPath :: Path a -> Maybe (Path a)
 parentPath p = case p of
   (pp :/ _) -> Just pp
   _ -> Nothing

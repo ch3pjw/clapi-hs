@@ -1,3 +1,6 @@
+{-# LANGUAGE
+    DataKinds
+#-}
 module NamespaceTrackerSpec where
 
 import Test.Hspec
@@ -28,7 +31,7 @@ import Clapi.Types.Digests
   , SubOp(..), DefOp(..))
 import Clapi.Types.Path
   ( Path, Seg, pattern Root, pattern (:/), TypeName, typeName, tTypeName
-  , Namespace(..))
+  , Namespace(..), AbsRel(..))
 import Clapi.Types.AssocList (alSingleton, alEmpty, alFromList)
 import Clapi.PerClientProto (ClientEvent(..), ServerEvent(..))
 import Clapi.NamespaceTracker (nstProtocol, Originator(..))
@@ -46,7 +49,7 @@ bob = "bob"
 helloS :: Seg
 helloS = [segq|hello|]
 
-helloP :: Path
+helloP :: Path 'Abs
 helloP = [pathq|/hello|]
 
 ocdEmpty :: OutboundClientDigest

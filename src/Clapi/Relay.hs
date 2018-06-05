@@ -1,4 +1,7 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE
+    DataKinds
+  , FlexibleContexts
+#-}
 
 module Clapi.Relay where
 
@@ -29,8 +32,8 @@ import Clapi.Types.Digests
   , InboundClientDigest(..), OutboundProviderDigest(..)
   , DataDigest, ContainerOps)
 import Clapi.Types.Path
-  ( Seg, Path, TypeName, qualify,  pattern (:</), pattern Root, pattern (:/)
-  , parentPath , Namespace(..))
+  ( Seg, Path, TypeName, qualify,  pattern Root, pattern (:/), parentPath
+  , Namespace(..), AbsRel(..), mkAbsPath)
 import Clapi.Types.Definitions (Editable, Definition, PostDefinition)
 import Clapi.Types.Wire (WireValue)
 import Clapi.Tree (RoseTreeNode(..), TimeSeries, treeLookupNode)
@@ -53,7 +56,7 @@ oppifyTimeSeries ts = TimeChange $
   Dkmap.flatten (\t (att, (i, wvs)) -> (att, OpSet t wvs i)) ts
 
 genInitDigest
-  :: Set Path -> Set (Tagged PostDefinition TypeName)
+  :: Set (Path 'Abs) -> Set (Tagged PostDefinition TypeName)
   -> Set (Tagged Definition TypeName) -> Valuespace
   -> OutboundClientInitialisationDigest
 genInitDigest ps ptns tns vs =
@@ -70,7 +73,7 @@ genInitDigest ps ptns tns vs =
     Map.foldlWithKey go initialOcd rtns
   where
     go
-      :: OutboundClientInitialisationDigest -> Path
+      :: OutboundClientInitialisationDigest -> Path 'Abs
       -> Either
           String
           ( Definition
@@ -161,7 +164,7 @@ relay vs = waitThenFwdOnly fwd
               Map.notMember ns (vsTyDefs vs)
             rootDef = fromJust $ vsLookupDef rootTypeName vs'
             qDd = maybe (error "Bad sneakers") id $
-              alMapKeys (unNamespace ns :</) dd
+              alMapKeys (mkAbsPath ns) dd
             qDd' = vsMinimiseDataDigest qDd vs
             errs' = Map.mapKeys (namespaceErrIdx ns) errs
             qPostDefs = Map.mapKeys (qualify ns) postDefs
@@ -170,7 +173,7 @@ relay vs = waitThenFwdOnly fwd
             qDefs'' = if shouldPubRoot
               then Map.insert rootTypeName (OpDefine rootDef) qDefs'
               else qDefs'
-            qContOps = Map.mapKeys (unNamespace ns :</) contOps
+            qContOps = Map.mapKeys (mkAbsPath ns) contOps
             qContOps' = vsMinimiseContOps qContOps vs
             mungedTas = Map.mapWithKey
               (\p tn ->
@@ -189,7 +192,7 @@ relay vs = waitThenFwdOnly fwd
                 -- FIXME: we need to provide defs for type assignments too.
                 qDefs''
                 mungedTas
-                dels -- plus something from the getContOps stuff above I reckon
+                (Map.mapKeys (mkAbsPath ns) $ dels) -- plus something from the getContOps stuff above I reckon
                 qDd' errs')
             relay vs'
         handleClientDigest
@@ -229,9 +232,9 @@ vsMinimiseDefinitions
 vsMinimiseDefinitions defs _ = defs
 
 -- FIXME: Worst case implementation
-vsMinimiseDataDigest :: DataDigest -> Valuespace -> DataDigest
+vsMinimiseDataDigest :: DataDigest ar -> Valuespace -> DataDigest ar
 vsMinimiseDataDigest dd _ = dd
 
 -- FIXME: Worst case implementation
-vsMinimiseContOps :: ContainerOps -> Valuespace -> ContainerOps
+vsMinimiseContOps :: ContainerOps ar -> Valuespace -> ContainerOps ar
 vsMinimiseContOps contOps _ = contOps

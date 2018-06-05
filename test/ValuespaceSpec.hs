@@ -1,5 +1,8 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
-{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE
+    DataKinds
+  , StandaloneDeriving
+#-}
 module ValuespaceSpec where
 
 import Test.Hspec
@@ -26,7 +29,7 @@ import Clapi.Types
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Path
   ( Path(..), pattern (:/), pattern Root, Seg, TypeName, typeName, tTypeName
-  , Namespace(..))
+  , Namespace(..), AbsRel(..))
 import Clapi.Valuespace
   ( Valuespace(..), validateVs, baseValuespace, processToRelayProviderDigest
   , processToRelayClientDigest, apiNs, vsRelinquish, ValidationErr(..))
@@ -36,7 +39,7 @@ import Clapi.Tree (RoseTreeNodeType(..))
 deriving instance Eq RoseTreeNodeType
 deriving instance Eq ValidationErr
 
-vsProviderErrorsOn :: Valuespace -> TrpDigest -> [Path] -> Expectation
+vsProviderErrorsOn :: Valuespace -> TrpDigest -> [Path 'Abs] -> Expectation
 vsProviderErrorsOn vs d ps = case (processToRelayProviderDigest d vs) of
     Left errMap -> errMap `shouldSatisfy`
       (\em -> Set.fromList (PathError <$> ps) == Map.keysSet em)

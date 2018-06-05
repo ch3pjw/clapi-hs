@@ -14,7 +14,7 @@ instance Encodable Seg where
   builder = builder . unSeg
   parser = parser >>= mkSeg
 
-instance Encodable Path.Path where
+instance Encodable (Path.Path a) where
   builder = builder . Path.toText
   parser = parser >>= Path.fromText
 

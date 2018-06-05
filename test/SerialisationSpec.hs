@@ -62,29 +62,29 @@ instance Arbitrary SubMessage where
 instance Arbitrary TypeMessage where
   arbitrary = MsgAssignType <$> arbitrary <*> arbitrary <*> arbitrary
 
-instance Arbitrary PostMessage where
+instance Arbitrary (PostMessage ar) where
   arbitrary = MsgPost <$> arbitrary <*> arbitrary <*>
     (Map.fromList <$> smallListOf arbitrary)
 
 genAttributee :: Gen (Maybe Attributee)
 genAttributee = oneof [return Nothing, Just <$> arbitraryTextNoNull]
 
-instance Arbitrary DataUpdateMessage where
+instance Arbitrary (DataUpdateMessage ar) where
   arbitrary = oneof
     [ MsgConstSet
-      <$> (arbitrary :: Gen Path)
-      <*> (smallListOf arbitrary :: Gen [WireValue])
+      <$> (arbitrary @(Path ar))
+      <*> (smallListOf $ arbitrary @WireValue)
       <*> genAttributee
     , MsgSet
-      <$> (arbitrary :: Gen Path)
-      <*> (arbitrary :: Gen TpId)
-      <*> (arbitrary :: Gen Time)
-      <*> (smallListOf arbitrary :: Gen [WireValue])
-      <*> (arbitrary :: Gen Interpolation)
+      <$> (arbitrary @(Path ar))
+      <*> (arbitrary @TpId)
+      <*> (arbitrary @Time)
+      <*> (smallListOf $ arbitrary @WireValue)
+      <*> (arbitrary @Interpolation)
       <*> genAttributee
     , MsgRemove
-      <$> (arbitrary :: Gen Path)
-      <*> (arbitrary :: Gen TpId)
+      <$> (arbitrary @(Path ar))
+      <*> (arbitrary @TpId)
       <*> genAttributee
     ]
   shrink (MsgConstSet Root [] Nothing) = []
@@ -97,11 +97,11 @@ instance Arbitrary DataUpdateMessage where
   shrink (MsgRemove p t a) = [MsgRemove p' t a' | (p', a') <- shrink (p, a)]
 
 
-instance Arbitrary ContainerUpdateMessage where
+instance Arbitrary (ContainerUpdateMessage ar) where
   arbitrary = MsgMoveAfter <$> arbitrary <*> arbitrary <*> arbitrary
     <*> genAttributee
 
-instance Arbitrary DeleteMessage where
+instance Arbitrary (DeleteMessage ar) where
   arbitrary = MsgDelete <$> arbitrary <*> arbitrary
 
 instance Arbitrary a => Arbitrary (ErrorIndex a) where

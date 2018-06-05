@@ -1,4 +1,7 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE
+    DataKinds
+  , FlexibleContexts
+#-}
 
 module Clapi.Valuespace
   ( Valuespace, vsTree, vsTyDefs, vsPostDefs
@@ -54,17 +57,18 @@ import Clapi.Types.Digests
   , TrpDigest(..), trpdRemovedPaths)
 import Clapi.Types.Messages (ErrorIndex(..))
 import Clapi.Types.Path
-  ( Seg, Path, pattern (:/), pattern Root, pattern (:</), TypeName, typeName
-  , tTypeName, qualify, unqualify, tTnNamespace, Namespace(..))
+  ( Seg, Path, pattern (:/), pattern Root, TypeName, typeName, mkAbsPath
+  , tTypeName, qualify, unqualify, tTnNamespace, Namespace(..), AbsRel(..))
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Tree (TreeType(..), unbounded)
 import Clapi.Validator (validate, extractTypeAssertions)
 import qualified Clapi.Types.Dkmap as Dkmap
 
 type DefMap def = Map Namespace (Map (Tagged def Seg) def)
-type TypeAssignmentMap = Mos.Dependencies Path (Tagged Definition TypeName)
-type Referer = Path
-type Referee = Path
+type TypeAssignmentMap =
+  Mos.Dependencies (Path 'Abs) (Tagged Definition TypeName)
+type Referer = Path 'Abs
+type Referee = Path 'Abs
 type Xrefs = Map Referee (Map Referer (Maybe (Set TpId)))
 
 data Valuespace = Valuespace
@@ -75,8 +79,9 @@ data Valuespace = Valuespace
   , vsXrefs :: Xrefs
   } deriving (Eq, Show)
 
-removeTamSubtree :: TypeAssignmentMap -> Path -> TypeAssignmentMap
-removeTamSubtree tam p = Mos.filterDependencies (not . flip Path.isChildOf p) tam
+removeTamSubtree :: TypeAssignmentMap -> Path 'Abs -> TypeAssignmentMap
+removeTamSubtree tam p =
+  Mos.filterDependencies (not . flip Path.isChildOf p) tam
 
 removeXrefs :: Referer -> Xrefs -> Xrefs
 removeXrefs referer = fmap (Map.delete referer)
@@ -172,21 +177,22 @@ vsLookupDef
 vsLookupDef tn vs = lookupDef tn $ vsTyDefs vs
 
 lookupTypeName
-  :: MonadFail m => Path -> TypeAssignmentMap -> m (Tagged Definition TypeName)
+  :: MonadFail m
+  => Path 'Abs -> TypeAssignmentMap -> m (Tagged Definition TypeName)
 lookupTypeName p = note "Type name not found" . Mos.getDependency p
 
-defForPath :: MonadFail m => Path -> Valuespace -> m Definition
+defForPath :: MonadFail m => Path 'Abs -> Valuespace -> m Definition
 defForPath p vs =
   lookupTypeName p (vsTyAssns vs) >>= flip lookupDef (vsTyDefs vs)
 
-getEditable :: MonadFail m => Path -> Valuespace -> m Editable
+getEditable :: MonadFail m => Path 'Abs -> Valuespace -> m Editable
 getEditable path vs = case path of
   Root :/ _ -> return ReadOnly
   p :/ s -> defForPath p vs >>= defDispatch (flip childEditable s)
   _ -> return ReadOnly
 
 valuespaceGet
-  :: MonadFail m => Path -> Valuespace
+  :: MonadFail m => Path 'Abs -> Valuespace
   -> m ( Definition
        , Tagged Definition TypeName
        , Editable
@@ -232,14 +238,14 @@ xrefUnion = Map.unionWith $ Map.unionWith $ liftM2 Set.union
 
 checkRefClaims
   :: TypeAssignmentMap
-  -> Map Path (Either RefTypeClaims (Map TpId RefTypeClaims))
+  -> Map (Path 'Abs) (Either RefTypeClaims (Map TpId RefTypeClaims))
   -> Either (Map (ErrorIndex TypeName) [ValidationErr]) ()
 checkRefClaims tyAssns = smashErrMap . Map.mapWithKey checkRefsAtPath
   where
     errIf m = unless (null m) $ Left m
     smashErrMap = errIf . Mol.unions . lefts . Map.elems
     checkRefsAtPath
-      :: Path
+      :: Path 'Abs
       -> Either RefTypeClaims (Map TpId RefTypeClaims)
       -> Either (Map (ErrorIndex TypeName) [ValidationErr]) ()
     checkRefsAtPath path refClaims =
@@ -252,7 +258,8 @@ checkRefClaims tyAssns = smashErrMap . Map.mapWithKey checkRefsAtPath
           (smashErrMap .
            Map.mapWithKey (\tpid -> doCheck (TimePointError path tpid)))
           refClaims
-    checkRef :: Tagged Definition TypeName -> Path -> Either ValidationErr ()
+    checkRef
+      :: Tagged Definition TypeName -> Path 'Abs -> Either ValidationErr ()
     checkRef requiredTn refP = case lookupTypeName refP tyAssns of
         Nothing -> Left $ RefTargetNotFound refP
         Just actualTn -> if actualTn == requiredTn
@@ -260,10 +267,10 @@ checkRefClaims tyAssns = smashErrMap . Map.mapWithKey checkRefsAtPath
             else Left $ RefTargetTypeErr refP actualTn requiredTn
 
 validateVs
-  :: Map Path (Maybe (Set TpId)) -> Valuespace
+  :: Map (Path 'Abs) (Maybe (Set TpId)) -> Valuespace
   -> Either
        (Map (ErrorIndex TypeName) [ValidationErr])
-       (Map Path (Tagged Definition TypeName), Valuespace)
+       (Map (Path 'Abs) (Tagged Definition TypeName), Valuespace)
 validateVs t v = do
     (newTypeAssns, refClaims, vs) <-
       -- As the root type is dynamic we always treat it as if it has been
@@ -288,11 +295,11 @@ validateVs t v = do
     -- then we should probably stop, but if we just encouter bad data, we should
     -- probably just capture the error and continue.
     inner
-      :: Map Path (Tagged Definition TypeName)
+      :: Map (Path 'Abs) (Tagged Definition TypeName)
       -> TypeClaimsByPath
-      -> Map Path (Maybe (Set TpId)) -> Valuespace
+      -> Map (Path 'Abs) (Maybe (Set TpId)) -> Valuespace
       -> Either (Map (ErrorIndex TypeName) [ValidationErr])
-           (Map Path (Tagged Definition TypeName), TypeClaimsByPath, Valuespace)
+           (Map (Path 'Abs) (Tagged Definition TypeName), TypeClaimsByPath, Valuespace)
     inner newTas newRefClaims tainted vs =
       let tree = vsTree vs; oldTyAssns = vsTyAssns vs in
       case Map.toAscList tainted of
@@ -355,7 +362,8 @@ validateVs t v = do
                       oldChildTypes newChildTypes
                     changedChildPaths = Map.mapKeys (path :/) changedChildTypes
 
-opsTouched :: ContainerOps -> DataDigest -> Map Path (Maybe (Set TpId))
+opsTouched
+  :: ContainerOps ar -> DataDigest ar -> Map (Path ar) (Maybe (Set TpId))
 opsTouched cops dd = fmap (const Nothing) cops <> fmap classifyDc (alToMap dd)
   where
     classifyDc :: DataChange -> Maybe (Set TpId)
@@ -377,7 +385,7 @@ processToRelayProviderDigest
   :: TrpDigest -> Valuespace
   -> Either
       (Map (ErrorIndex TypeName) [Text])
-      (Map Path (Tagged Definition TypeName), Valuespace)
+      (Map (Path 'Abs) (Tagged Definition TypeName), Valuespace)
 processToRelayProviderDigest trpd vs =
   let
     ns = trpdNamespace trpd
@@ -385,8 +393,8 @@ processToRelayProviderDigest trpd vs =
     redefdPaths = mconcat $
       fmap (\s -> Mos.getDependants (qualify ns s) tas) $ Map.keys $
       trpdDefinitions trpd
-    qData = fromJust $ alMapKeys (unNamespace ns :</) $ trpdData trpd
-    qCops = Map.mapKeys (unNamespace ns :</) $ trpdContainerOps trpd
+    qData = fromJust $ alMapKeys (mkAbsPath ns) $ trpdData trpd
+    qCops = Map.mapKeys (mkAbsPath ns) $ trpdContainerOps trpd
     updatedPaths = opsTouched qCops qData
     tpRemovals :: DataChange -> Set TpId
     tpRemovals (ConstChange {})= mempty
@@ -403,14 +411,17 @@ processToRelayProviderDigest trpd vs =
       Valuespace tree' postDefs' defs' tas xrefs'
     return (updatedTypes, vs')
 
-validatePath :: Valuespace -> Path -> Maybe (Set TpId) -> Either [ValidationErr] (Either RefTypeClaims (Map TpId RefTypeClaims))
+validatePath
+  :: Valuespace -> Path 'Abs -> Maybe (Set TpId)
+  -> Either [ValidationErr] (Either RefTypeClaims (Map TpId RefTypeClaims))
 validatePath vs p mTpids = do
     def <- first pure $ fromMonadFail $ defForPath p vs
     t <- maybe (Left [ProgrammingErr "Tainted but missing"]) Right $ Tree.treeLookup p $ vsTree vs
     validateRoseTreeNode def t mTpids
 
 processToRelayClientDigest
-  :: ContainerOps -> DataDigest -> Valuespace -> Map (ErrorIndex TypeName) [ValidationErr]
+  :: ContainerOps 'Abs -> DataDigest 'Abs -> Valuespace
+  -> Map (ErrorIndex TypeName) [ValidationErr]
 processToRelayClientDigest reords dd vs =
   let
     (updateErrs, tree') = Tree.updateTreeWithDigest reords dd (vsTree vs)
@@ -427,8 +438,8 @@ processToRelayClientDigest reords dd vs =
       [fmap (fmap $ GenericErr . Text.unpack) updateErrs, validationErrs, cannotErrs]
 
 fillTyAssns
-  :: DefMap Definition -> TypeAssignmentMap -> [Path]
-  -> (TypeAssignmentMap, Set Path)
+  :: DefMap Definition -> TypeAssignmentMap -> [Path 'Abs]
+  -> (TypeAssignmentMap, Set (Path 'Abs))
 fillTyAssns defs = inner mempty
   where
     inner freshlyAssigned tam paths = case paths of
@@ -455,9 +466,9 @@ data ValidationErr
   | BadNodeType {vebntExpected :: RoseTreeNodeType, vebntActual :: RoseTreeNodeType}
   | MissingChild Seg
   | ExtraChild Seg
-  | RefTargetNotFound Path
+  | RefTargetNotFound (Path 'Abs)
   | RefTargetTypeErr
-    { veRttePath :: Path
+    { veRttePath :: Path 'Abs
     , veRtteExpectedType :: Tagged Definition TypeName
     , veRtteTargetType :: Tagged Definition TypeName}
   | LibertyErr String
@@ -531,7 +542,7 @@ vsRelinquish ns (Valuespace tree postDefs defs tas xrefs) =
       (filterXrefs (\p -> not (p `Path.isChildOf` nsp)) xrefs)
 
 validateExistingXrefs
-  :: Xrefs -> Map Path (Tagged Definition TypeName)
+  :: Xrefs -> Map (Path 'Abs) (Tagged Definition TypeName)
   -> Map (ErrorIndex TypeName) [ValidationErr]
 validateExistingXrefs xrs newTas =
   let

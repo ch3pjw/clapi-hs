@@ -1,4 +1,6 @@
-
+{-# LANGUAGE
+    DataKinds
+#-}
 module Clapi.RelayApi (relayApiProto, PathSegable(..)) where
 
 import Control.Monad.Trans (lift)
@@ -19,8 +21,8 @@ import Clapi.Types.Definitions (tupleDef, structDef, arrayDef)
 import Clapi.Types.Digests
   (DefOp(OpDefine), DataChange(..), FrcDigest(..), DataDigest)
 import Clapi.Types.Path
-  ( Seg, typeName, tTypeName, pattern Root, pattern (:/)
-  , pattern (:</), Namespace(..))
+  ( Seg, typeName, tTypeName, pattern Root, pattern (:/), Namespace(..)
+  , AbsRel(..), mkAbsPath)
 import Clapi.Types.Path (Path)
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Tree (TreeType(..), unbounded)
@@ -86,7 +88,7 @@ relayApiProto selfAddr =
       (alFromList
         [ ([pathq|/build|], ConstChange Nothing [WireValue @Text "banana"])
         , ([pathq|/self|], ConstChange Nothing [
-             WireValue $ Path.toText $ selfSeg :</ selfClientPath])
+             WireValue $ Path.toText $ mkAbsPath rns selfClientPath])
         , ( selfClientPath :/ clock_diff
           , ConstChange Nothing [WireValue @Float 0.0])
         , ( selfClientPath :/ dnSeg
@@ -171,13 +173,14 @@ relayApiProto selfAddr =
             _ -> sendRev se
           steadyState timingMap ownerMap
         ownerChangeInfo
-          :: Map Namespace Seg -> (DataDigest, Map Path (Maybe Attributee))
+          :: Map Namespace Seg
+          -> (DataDigest 'Rel, Map (Path 'Rel) (Maybe Attributee))
         ownerChangeInfo ownerMap' =
             ( alFromMap $ Map.mapKeys toOwnerPath $ toSetRefOp <$> ownerMap'
             , Map.mapKeys (([pathq|/owners|] :/) . unNamespace) $
                 const Nothing <$>
                 ownerMap `Map.difference` ownerMap')
-        toOwnerPath :: Namespace -> Path
+        toOwnerPath :: Namespace -> Path 'Rel
         toOwnerPath s = [pathq|/owners|] :/ unNamespace s
         toSetRefOp ns = ConstChange Nothing [
           WireValue $ Path.toText $ Root :/ selfSeg :/ [segq|clients|] :/ ns]

@@ -57,7 +57,7 @@ name = fromJust . mkSeg . Text.pack <$> smallListOf1 (elements ['a'..'z'])
 instance Arbitrary Seg where
   arbitrary = name
 
-instance Arbitrary Path where
+instance Arbitrary (Path ar) where
   arbitrary = Path <$> smallListOf name
   shrink (Path names) = fmap Path . drop 1 . reverse . inits $ names
 

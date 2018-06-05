@@ -23,7 +23,7 @@ import Clapi.Types.Digests
   , OutboundClientDigest(..), outboundClientDigest, TrprDigest(..))
 import Clapi.Types.Messages (ErrorIndex(..))
 import Clapi.Types.Path
-  (pattern Root, tTypeName, pattern (:/), pattern (:</), Namespace(..))
+  (pattern Root, tTypeName, pattern (:/), Namespace(..), mkAbsPath)
 import Clapi.Types.Tree (TreeType(..), unbounded)
 import Clapi.Types.Wire (WireValue(..))
 import Clapi.Valuespace
@@ -46,7 +46,7 @@ spec = describe "the relay protocol" $ do
           , (foo, (tTypeName (Namespace foo) foo, ReadOnly))
           ]
         expectedOutDig = Ocd $ outboundClientDigest
-          { ocdData = qualify foo dd
+          { ocdData = qualify (Namespace foo) dd
           , ocdDefinitions = Map.fromList
             [ (tTypeName (Namespace foo) foo, OpDefine fooDef)
             , (tTypeName apiNs [segq|root|], OpDefine extendedRootDef)
@@ -113,7 +113,7 @@ spec = describe "the relay protocol" $ do
           }
         qKid = fooP :/ kid
         expectedOutDig = Ocd $ outboundClientDigest
-          { ocdData = qualify foo dd
+          { ocdData = qualify (Namespace foo) dd
           , ocdTypeAssignments = Map.singleton qKid
               (tTypeName (Namespace foo) kid, ReadOnly)
           , ocdContainerOps = Map.singleton fooP $
@@ -138,8 +138,9 @@ spec = describe "the relay protocol" $ do
         test = do
             sendFwd ((), Ipd $ (trpDigest $ Namespace foo) {trpdData = dd})
             waitThenRevOnly $
-              lift . (`shouldBe` Ocd (outboundClientDigest {ocdData = qualify foo dd})) .
-              snd
+              lift . (`shouldBe` Ocd (
+                outboundClientDigest {ocdData = qualify (Namespace foo) dd})
+              ) . snd
       in runEffect $ test <<-> relay vsWithInt
     it "should not send empty ocids/opds to client requests" $
       let
@@ -155,4 +156,4 @@ spec = describe "the relay protocol" $ do
     foo = [segq|foo|]
     fooP = Root :/ foo
     bob = Just "bob"
-    qualify ns = maybe (error "bad sneakers") id . alMapKeys (ns :</)
+    qualify ns = maybe (error "bad sneakers") id . alMapKeys (mkAbsPath ns)

@@ -131,11 +131,11 @@ instance Encodable TypeMessage where
     builder (MsgAssignType p tn l) = builder p <<>> builder tn <<>> builder l
     parser = MsgAssignType <$> parser <*> parser <*> parser
 
-instance Encodable PostMessage where
+instance Encodable (PostMessage ar) where
     builder (MsgPost p ph args) = builder p <<>> builder ph <<>> builder args
     parser = MsgPost <$> parser <*> parser <*> parser
 
-instance Encodable DeleteMessage where
+instance Encodable (DeleteMessage ar) where
     builder (MsgDelete p att) = builder p <<>> builder att
     parser = MsgDelete <$> parser <*> parser
 
@@ -145,7 +145,7 @@ data DataUpdateMsgType
   | DUMTRemove
   deriving (Enum, Bounded)
 
-dumtTaggedData :: TaggedData DataUpdateMsgType DataUpdateMessage
+dumtTaggedData :: TaggedData DataUpdateMsgType (DataUpdateMessage ar)
 dumtTaggedData = taggedData typeToTag msgToType
   where
     typeToTag DUMTConstSet = [btq|S|]
@@ -155,13 +155,13 @@ dumtTaggedData = taggedData typeToTag msgToType
     msgToType (MsgSet {}) = DUMTSet
     msgToType (MsgRemove {}) = DUMTRemove
 
-dumtParser :: DataUpdateMsgType -> Parser DataUpdateMessage
+dumtParser :: DataUpdateMsgType -> Parser (DataUpdateMessage ar)
 dumtParser e = case e of
     DUMTConstSet -> MsgConstSet <$> parser <*> parser <*> parser
     DUMTSet -> MsgSet <$> parser <*> parser <*> parser <*> parser <*> parser <*> parser
     DUMTRemove -> MsgRemove <$> parser <*> parser <*> parser
 
-dumtBuilder :: MonadFail m => DataUpdateMessage -> m Builder
+dumtBuilder :: MonadFail m => DataUpdateMessage ar -> m Builder
 dumtBuilder m = case m of
     MsgConstSet p v a -> builder p <<>> builder v <<>> builder a
     MsgSet p ptId t v i a ->
@@ -170,11 +170,11 @@ dumtBuilder m = case m of
     MsgRemove p t a ->
       builder p <<>> builder t <<>> builder a
 
-instance Encodable DataUpdateMessage where
+instance Encodable (DataUpdateMessage ar) where
     builder = tdTaggedBuilder dumtTaggedData dumtBuilder
     parser = tdTaggedParser dumtTaggedData dumtParser
 
-instance Encodable ContainerUpdateMessage where
+instance Encodable (ContainerUpdateMessage ar) where
     parser =  MsgMoveAfter <$> parser <*> parser <*> parser <*> parser
     builder (MsgMoveAfter p s targ att) =
       builder p <<>> builder s <<>> builder targ <<>> builder att

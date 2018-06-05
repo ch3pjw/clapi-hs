@@ -1,3 +1,6 @@
+{-# LANGUAGE
+    DataKinds
+#-}
 module Clapi.NamespaceTracker where
 
 import Prelude hiding (fail)
@@ -30,7 +33,7 @@ import Clapi.Types.Digests
 -- Also `Either String a` MonadFail instance:
 import Clapi.Types (Definition, PostDefinition)
 import Clapi.Types.Path
-  (Path, TypeName, pattern (:/), pattern Root, Namespace(..))
+  (Path, TypeName, pattern (:/), pattern Root, Namespace(..), AbsRel(..))
 import qualified Clapi.Types.Path as Path
 import Clapi.PerClientProto (ClientEvent(..), ServerEvent(..))
 import Clapi.Protocol (Protocol, Directed(..), wait, sendFwd, sendRev)
@@ -51,7 +54,7 @@ data NstState i
   { nstOwners :: Map Namespace i
   , nstPostTypeRegistrations :: Mos i (Tagged PostDefinition TypeName)
   , nstTypeRegistrations :: Mos i (Tagged Definition TypeName)
-  , nstDataRegistrations :: Mos i Path
+  , nstDataRegistrations :: Mos i (Path 'Abs)
   } deriving Show
 
 
@@ -261,7 +264,7 @@ unsubDeleted
        , Mos i (Tagged Definition TypeName)
        , Mos i (Tagged PostDefinition TypeName)
        , Mos i (Tagged Definition TypeName)
-       , Mos i Path, Mos i Path)
+       , Mos i (Path 'Abs), Mos i (Path 'Abs))
 unsubDeleted d = do
     nsts <- get
     let (ptUnsubs, ptRemainingSubs) = Mos.partition
@@ -295,7 +298,7 @@ broadcastClientDigest
      , Mos i (Tagged Definition TypeName)
      , Mos i (Tagged PostDefinition TypeName)
      , Mos i (Tagged Definition TypeName)
-     , Mos i Path, Mos i Path)
+     , Mos i (Path 'Abs), Mos i (Path 'Abs))
   -> NstProtocol m i ()
 broadcastClientDigest d
   (ptUnsubs, tUnsubs, ptRemSubs, tRemSubs, dUnsubs, dRemSubs) = do
@@ -330,7 +333,8 @@ frpdsByNamespace (OutboundProviderDigest dels contOps dd) =
     -- FIXME: this will need to have some POST data in it at some point!
     posts = mempty
     f ns dels' (contOps', dd') =
-      FrpDigest ns dels' posts dd' (contOps' <> rootCOps)
+      -- FIXME: what are the rootCOps for?
+      FrpDigest ns dels' posts dd' contOps' -- (contOps' <> rootCOps)
   in
     zipMapsWithKey mempty (mempty, alEmpty) f (Map.mapKeys Namespace delsByNs) $
       zipMapsWithKey mempty alEmpty (const (,))
@@ -338,9 +342,10 @@ frpdsByNamespace (OutboundProviderDigest dels contOps dd) =
         (Map.mapKeys Namespace ddByNs)
 
 produceFromRelayClientDigest
-  :: OutboundClientDigest -> Set Path -> Set (Tagged PostDefinition TypeName)
+  :: OutboundClientDigest -> Set (Path 'Abs)
+  -> Set (Tagged PostDefinition TypeName)
   -> Set (Tagged Definition TypeName)
-  -> Set Path -> Set (Tagged PostDefinition TypeName)
+  -> Set (Path 'Abs) -> Set (Tagged PostDefinition TypeName)
   -> Set (Tagged Definition TypeName) -> FrcDigest
 produceFromRelayClientDigest
   (OutboundClientDigest cOps postDefs defs tas dels dd errs) pUsubs ptUnsubs

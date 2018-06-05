@@ -1,3 +1,7 @@
+{-# LANGUAGE
+    DataKinds
+  , TypeFamilies
+#-}
 module Clapi.Types.Messages where
 
 import Data.Bifunctor (bimap)
@@ -9,17 +13,22 @@ import Data.Word (Word32)
 import Clapi.Types.Base (Attributee, Time, Interpolation)
 import Clapi.Types.Definitions (Definition, Editable, PostDefinition)
 import Clapi.Types.Path
-  (Seg, Path, TypeName, qualify, unqualify, pattern (:</), Namespace(..))
+  ( Seg, Path, AbsRel(..), TypeName, qualify, unqualify, Namespace(..)
+  , mkAbsPath)
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Wire (WireValue)
 
 -- FIXME: redefinition
 type TpId = Word32
 
+type family Munge a :: AbsRel
+type instance Munge Seg = 'Rel
+type instance Munge TypeName = 'Abs
+
 data ErrorIndex a
   = GlobalError
-  | PathError Path
-  | TimePointError Path TpId
+  | PathError (Path (Munge a))
+  | TimePointError (Path (Munge a)) TpId
   | PostTypeError (Tagged PostDefinition a)
   | TypeError (Tagged Definition a)
   deriving (Show, Eq, Ord)
@@ -36,8 +45,8 @@ splitErrIdx ei = case ei of
 namespaceErrIdx :: Namespace -> ErrorIndex Seg -> ErrorIndex TypeName
 namespaceErrIdx ns ei = case ei of
   GlobalError -> GlobalError
-  PathError p -> PathError $ unNamespace ns :</ p
-  TimePointError p tpid -> TimePointError (unNamespace ns :</ p) tpid
+  PathError p -> PathError $ mkAbsPath ns p
+  TimePointError p tpid -> TimePointError (mkAbsPath ns p) tpid
   PostTypeError s -> PostTypeError $ qualify ns s
   TypeError s -> TypeError $ qualify ns s
 
@@ -52,34 +61,34 @@ data DefMessage ident def
 -- FIXME: might be nicer to break this up into sub and unsub values typed by
 -- what they are subscriptions for:
 data SubMessage
-  = MsgSubscribe {subMsgPath :: Path}
+  = MsgSubscribe {subMsgPath :: Path 'Abs}
   | MsgPostTypeSubscribe {subMsgPostTypeName :: Tagged PostDefinition TypeName}
   | MsgTypeSubscribe {subMsgTypeName :: Tagged Definition TypeName}
-  | MsgUnsubscribe {subMsgPath :: Path}
+  | MsgUnsubscribe {subMsgPath :: Path 'Abs}
   | MsgPostTypeUnsubscribe
     {subMsgPostTypeName :: Tagged PostDefinition TypeName}
   | MsgTypeUnsubscribe {subMsgTypeName :: Tagged Definition TypeName}
   deriving (Eq, Show)
 
 data TypeMessage
-  = MsgAssignType Path (Tagged Definition TypeName) Editable
+  = MsgAssignType (Path 'Abs) (Tagged Definition TypeName) Editable
   deriving (Show, Eq)
 
-data PostMessage
+data PostMessage (ar :: AbsRel)
   = MsgPost
-  { pMsgPath :: Path
+  { pMsgPath :: Path ar
   , pMsgPlaceholder :: Seg
   , pMsgArgs :: Map Seg WireValue
   } deriving (Show, Eq)
 
-data DataUpdateMessage
+data DataUpdateMessage (ar :: AbsRel)
   = MsgConstSet
-      { duMsgPath :: Path
+      { duMsgPath :: Path ar
       , duMsgArgs :: [WireValue]
       , duMsgAttributee :: Maybe Attributee
       }
   | MsgSet
-      { duMsgPath :: Path
+      { duMsgPath :: Path ar
       , duMsgTpId :: TpId
       , duMsgTime :: Time
       , duMsgArgs :: [WireValue]
@@ -87,23 +96,24 @@ data DataUpdateMessage
       , duMsgAttributee :: Maybe Attributee
       }
   | MsgRemove
-      { duMsgPath :: Path
+      { duMsgPath :: Path ar
       , duMsgTpId :: Word32
       , duMsgAttributee :: Maybe Attributee
       }
    deriving (Eq, Show)
 
-data ContainerUpdateMessage
+data ContainerUpdateMessage (ar :: AbsRel)
   = MsgMoveAfter
-      { cuMsgPath :: Path
+      { cuMsgPath :: Path ar
       , cuMsgTarg :: Seg
       , cuMsgRef :: Maybe Seg
       , cuMsgAttributee :: Maybe Attributee
       }
   deriving (Eq, Show)
 
-data DeleteMessage = MsgDelete
-      { dMsgPath :: Path
+data DeleteMessage (ar :: AbsRel)
+  = MsgDelete
+      { dMsgPath :: Path ar
       , dMsgAttributee :: Maybe Attributee
       }
   deriving (Eq, Show)
@@ -113,9 +123,9 @@ data ToRelayProviderBundle = ToRelayProviderBundle
   , trpbErrors :: [MsgError Seg]
   , trpbPostDefs :: [DefMessage (Tagged PostDefinition Seg) PostDefinition]
   , trpbDefinitions :: [DefMessage (Tagged Definition Seg) Definition]
-  , trpbDeletes :: [DeleteMessage]
-  , trpbData :: [DataUpdateMessage]
-  , trpbContMsgs :: [ContainerUpdateMessage]
+  , trpbDeletes :: [DeleteMessage 'Rel]
+  , trpbData :: [DataUpdateMessage 'Rel]
+  , trpbContMsgs :: [ContainerUpdateMessage 'Rel]
   } deriving (Show, Eq)
 
 data ToRelayProviderRelinquish
@@ -123,10 +133,10 @@ data ToRelayProviderRelinquish
 
 data FromRelayProviderBundle = FromRelayProviderBundle
   { frpbNamespace :: Namespace
-  , frpbDeletes :: [DeleteMessage]
-  , frpbPosts :: [PostMessage]
-  , frpbData :: [DataUpdateMessage]
-  , frpbContMsgs :: [ContainerUpdateMessage]
+  , frpbDeletes :: [DeleteMessage 'Rel]
+  , frpbPosts :: [PostMessage 'Rel]
+  , frpbData :: [DataUpdateMessage 'Rel]
+  , frpbContMsgs :: [ContainerUpdateMessage 'Rel]
   } deriving (Show, Eq)
 
 data FromRelayProviderErrorBundle = FromRelayProviderErrorBundle
@@ -135,23 +145,23 @@ data FromRelayProviderErrorBundle = FromRelayProviderErrorBundle
 
 data ToRelayClientBundle = ToRelayClientBundle
   { trcbSubs :: [SubMessage]
-  , trcbDeletes :: [DeleteMessage]
-  , trcbPosts :: [PostMessage]
-  , trcbData :: [DataUpdateMessage]
-  , trcbContMsgs :: [ContainerUpdateMessage]
+  , trcbDeletes :: [DeleteMessage 'Abs]
+  , trcbPosts :: [PostMessage 'Abs]
+  , trcbData :: [DataUpdateMessage 'Abs]
+  , trcbContMsgs :: [ContainerUpdateMessage 'Abs]
   } deriving (Eq, Show)
 
 data FromRelayClientBundle = FromRelayClientBundle
   { frcbPostTypeUnsubs :: [Tagged PostDefinition TypeName]
   , frcbTypeUnsubs :: [Tagged Definition TypeName]
-  , frcbDataUnsubs :: [Path]
+  , frcbDataUnsubs :: [Path 'Abs]
   , frcbErrors :: [MsgError TypeName]
   , frcbPostDefs :: [DefMessage (Tagged PostDefinition TypeName) PostDefinition]
   , frcbDefinitions :: [DefMessage (Tagged Definition TypeName) Definition]
   , frcbTypeAssignments :: [TypeMessage]
-  , frcbDeletes :: [DeleteMessage]
-  , frcbData :: [DataUpdateMessage]
-  , frcbContMsgs :: [ContainerUpdateMessage]
+  , frcbDeletes :: [DeleteMessage 'Abs]
+  , frcbData :: [DataUpdateMessage 'Abs]
+  , frcbContMsgs :: [ContainerUpdateMessage 'Abs]
   } deriving (Show, Eq)
 
 data ToRelayBundle
