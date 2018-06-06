@@ -1,8 +1,7 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
-{-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE
+    DataKinds
+  , FlexibleContexts
+#-}
 
 module Clapi.Relay where
 
@@ -15,6 +14,7 @@ import qualified Data.Set as Set
 import Data.Maybe (isJust, fromJust, mapMaybe)
 import Data.Monoid
 import Data.Set (Set)
+import Data.Tagged (Tagged(..))
 import qualified Data.Text as Text
 import Data.Void (Void)
 
@@ -31,15 +31,16 @@ import Clapi.Types.Digests
   , OutboundClientDigest(..), OutboundClientInitialisationDigest, ocdNull, opdNull
   , InboundClientDigest(..), OutboundProviderDigest(..)
   , DataDigest, ContainerOps)
-import Clapi.Types.Path (Seg, Path, TypeName(..), pattern (:</), pattern Root, parentPath)
-import Clapi.Types.Definitions (Liberty, Definition)
+import Clapi.Types.Path
+  ( Seg, Path, TypeName, qualify,  pattern Root, pattern (:/), parentPath
+  , Namespace(..), AbsRel(..), mkAbsPath)
+import Clapi.Types.Definitions (Editable, Definition, PostDefinition)
 import Clapi.Types.Wire (WireValue)
-import Clapi.Types.SequenceOps (SequenceOp(..))
 import Clapi.Tree (RoseTreeNode(..), TimeSeries, treeLookupNode)
 import Clapi.Valuespace
   ( Valuespace(..), vsRelinquish, vsLookupPostDef, vsLookupDef
   , processToRelayProviderDigest, processToRelayClientDigest, valuespaceGet
-  , getLiberty, rootTypeName)
+  , getEditable, rootTypeName)
 import Clapi.Protocol (Protocol, waitThenFwdOnly, sendRev)
 
 mapPartitionJust :: Map k (Maybe a) -> (Map k a, Set k)
@@ -55,7 +56,8 @@ oppifyTimeSeries ts = TimeChange $
   Dkmap.flatten (\t (att, (i, wvs)) -> (att, OpSet t wvs i)) ts
 
 genInitDigest
-  :: Set Path -> Set TypeName -> Set TypeName -> Valuespace
+  :: Set (Path 'Abs) -> Set (Tagged PostDefinition TypeName)
+  -> Set (Tagged Definition TypeName) -> Valuespace
   -> OutboundClientInitialisationDigest
 genInitDigest ps ptns tns vs =
   let
@@ -66,13 +68,18 @@ genInitDigest ps ptns tns vs =
     errMap = (pure . Text.pack <$> Map.mapKeys TypeError tnErrs) <>
       (pure . Text.pack <$> Map.mapKeys PostTypeError ptnErrs)
     initialOcd = OutboundClientDigest mempty
-      (OpDefine <$> postDefs) (OpDefine <$> defs) mempty alEmpty errMap
+      (OpDefine <$> postDefs) (OpDefine <$> defs) mempty mempty alEmpty errMap
   in
     Map.foldlWithKey go initialOcd rtns
   where
     go
-      :: OutboundClientInitialisationDigest -> Path
-      -> Either String (Definition, TypeName, Liberty, RoseTreeNode [WireValue])
+      :: OutboundClientInitialisationDigest -> Path 'Abs
+      -> Either
+          String
+          ( Definition
+          , Tagged Definition TypeName
+          , Editable
+          , RoseTreeNode [WireValue])
       -> OutboundClientInitialisationDigest
     go d p (Left errStr) = d {
         ocdErrors = Map.unionWith (<>) (ocdErrors d)
@@ -85,39 +92,41 @@ genInitDigest ps ptns tns vs =
           ocdTypeAssignments = Map.insert p (tn, lib) (ocdTypeAssignments d)}
       in case rtn of
         RtnEmpty -> error "Valid tree should not contain empty nodes, but did"
-        RtnChildren kidsAl ->
-          let (kidSegs, kidAtts) = unzip $ unAssocList kidsAl in
-          d' {
-            ocdContainerOps = Map.insert p
-              (Map.fromList $ zipWith3
-                (\s a att -> (s, (att, SoPresentAfter a)))
-                kidSegs (Nothing : (Just <$> kidSegs)) kidAtts)
-            (ocdContainerOps d')
-          }
+        RtnChildren kidsAl -> d' {ocdContainerOps =
+           Map.insert p (childAfters kidsAl) $ ocdContainerOps d'}
         RtnConstData att vals -> d'{ocdData =
           alInsert p (ConstChange att vals) $ ocdData d}
         RtnDataSeries ts ->
           d'{ocdData = alInsert p (oppifyTimeSeries ts) $ ocdData d}
 
+-- | Compares two lists of child keys returning the keys that are only present
+--   in the first (i.e. removals), the dependencies for keys that are in both
+--   (changes) and the dependencies for keys that are only in the second
+--   (additions).
 contDiff
-  :: AssocList Seg (Maybe Attributee) -> AssocList Seg (Maybe Attributee)
-  -> Map Seg (Maybe Attributee, SequenceOp Seg)
-contDiff a b = merge
-    asAbsent preserveMissing dropMatched (aftersFor a) (aftersFor b)
+  :: [Seg] -> [Seg] -> (Set Seg, Map Seg (Maybe Seg), Map Seg (Maybe Seg))
+contDiff a b =
+    ( Set.difference (Map.keysSet $ aftersFor a) (Map.keysSet $ aftersFor b)
+    , Map.intersection (aftersFor b) (aftersFor a)
+    , Map.difference (aftersFor b) (aftersFor a))
   where
-    asAfter (acc, prev) k ma = ((k, (ma, SoPresentAfter prev)) : acc, Just k)
-    aftersFor = Map.fromList . fst . alFoldlWithKey asAfter ([], Nothing)
-    dropMatched = zipWithMaybeMatched $ const $ const $ const Nothing
-    asAbsent = mapMissing $ \_ (ma, _) -> (ma, SoAbsent)
+    aftersFor :: [Seg] -> Map Seg (Maybe Seg)
+    aftersFor segs = Map.fromList $ zip segs (Nothing : (Just <$> segs))
 
-mayContDiff
-  :: Maybe (RoseTreeNode a) -> AssocList Seg (Maybe Attributee)
-  -> Maybe (Map Seg (Maybe Attributee, SequenceOp Seg))
-mayContDiff ma kb = case ma of
-    Just (RtnChildren ka) -> if ka == kb
-        then Nothing
-        else Just $ contDiff ka kb
-    _ -> Nothing
+childAfters
+  :: AssocList Seg (Maybe Attributee) -> Map Seg (Maybe Attributee, Maybe Seg)
+childAfters children = let (segs, atts) = unzip $ unAssocList children in
+  Map.fromList $ zipWith3 (\s after att -> (s, (att, after)))
+    segs (Nothing : (Just <$> segs)) atts
+
+-- mayContDiff
+--   :: Maybe (RoseTreeNode a) -> AssocList Seg (Maybe Attributee)
+--   -> Maybe (Map Seg (Maybe Attributee, SequenceOp Seg))
+-- mayContDiff ma kb = case ma of
+--     Just (RtnChildren ka) -> if ka == kb
+--         then Nothing
+--         else Just $ contDiff ka kb
+--     _ -> Nothing
 
 relay
   :: Monad m => Valuespace
@@ -133,54 +142,62 @@ relay vs = waitThenFwdOnly fwd
         Iprd (TrprDigest ns) -> do
           let vs' = vsRelinquish ns vs
           sendRev (i, Ocd $ OutboundClientDigest
-            -- FIXME: Attributing revocation to nobody!
-            (Map.singleton Root $ Map.singleton ns (Nothing, SoAbsent))
-            (fmap (const OpUndefine) $ Map.mapKeys (TypeName ns) $
+            mempty
+            (fmap (const OpUndefine) $ Map.mapKeys (qualify ns) $
                Map.findWithDefault mempty ns $ vsPostDefs vs)
             (Map.insert rootTypeName
               (OpDefine $ fromJust $ vsLookupDef rootTypeName vs') $
-              (fmap (const OpUndefine) $ Map.mapKeys (TypeName ns) $
+              (fmap (const OpUndefine) $ Map.mapKeys (qualify ns) $
                  Map.findWithDefault mempty ns $ vsTyDefs vs))
-            mempty alEmpty mempty)
+            mempty
+            -- FIXME: Attributing revocation to nobody!
+            (Map.singleton (Root :/ unNamespace ns) Nothing)
+            alEmpty mempty)
           relay vs'
       where
         handleOwnerSuccess
-            (TrpDigest ns postDefs defs dd contOps errs) (updatedTyAssns, vs') =
+            (TrpDigest ns postDefs defs dels dd contOps errs)
+            (updatedTyAssns, vs') =
           let
             shouldPubRoot =
-              Map.member ns defs &&
+              Map.member (Tagged $ unNamespace ns) defs &&
               Map.notMember ns (vsTyDefs vs)
             rootDef = fromJust $ vsLookupDef rootTypeName vs'
-            qDd = maybe (error "Bad sneakers") id $ alMapKeys (ns :</) dd
+            qDd = maybe (error "Bad sneakers") id $
+              alMapKeys (mkAbsPath ns) dd
             qDd' = vsMinimiseDataDigest qDd vs
             errs' = Map.mapKeys (namespaceErrIdx ns) errs
-            qPostDefs = Map.mapKeys (TypeName ns) postDefs
-            qDefs = Map.mapKeys (TypeName ns) defs
+            qPostDefs = Map.mapKeys (qualify ns) postDefs
+            qDefs = Map.mapKeys (qualify ns) defs
             qDefs' = vsMinimiseDefinitions qDefs vs
             qDefs'' = if shouldPubRoot
               then Map.insert rootTypeName (OpDefine rootDef) qDefs'
               else qDefs'
-            qContOps = Map.mapKeys (ns :</) contOps
+            qContOps = Map.mapKeys (mkAbsPath ns) contOps
             qContOps' = vsMinimiseContOps qContOps vs
             mungedTas = Map.mapWithKey
-              (\p tn -> (tn, either error id $ getLiberty p vs')) updatedTyAssns
-            getContOps p = case fromJust $ treeLookupNode p $ vsTree vs' of
-              RtnChildren kb -> (p,) <$> mayContDiff (treeLookupNode p $ vsTree vs) kb
-              _ -> Nothing
-            extraCops = Map.fromAscList $ mapMaybe (\p -> parentPath p >>= getContOps) $
-              Set.toAscList $ Map.keysSet updatedTyAssns
-            qContOps'' = extraCops <> qContOps'
+              (\p tn ->
+                 (tn, either error id $ getEditable p vs')) updatedTyAssns
+            -- getContOps p = case fromJust $ treeLookupNode p $ vsTree vs' of
+            --   RtnChildren kb -> (p,) <$> mayContDiff (treeLookupNode p $ vsTree vs) kb
+            --   _ -> Nothing
+            -- extraCops = Map.fromAscList $ mapMaybe (\p -> parentPath p >>= getContOps) $
+            --   Set.toAscList $ Map.keysSet updatedTyAssns
+            -- qContOps'' = extraCops <> qContOps'
           in do
             sendRev (i,
               Ocd $ OutboundClientDigest
-                qContOps''
+                qContOps'
                 qPostDefs
                 -- FIXME: we need to provide defs for type assignments too.
                 qDefs''
-                mungedTas qDd' errs')
+                mungedTas
+                (Map.mapKeys (mkAbsPath ns) $ dels) -- plus something from the getContOps stuff above I reckon
+                qDd' errs')
             relay vs'
         handleClientDigest
-            (InboundClientDigest gets postTypeGets typeGets contOps dd) errMap =
+            (InboundClientDigest gets postTypeGets typeGets contOps dels dd)
+            errMap =
           let
             -- TODO: Be more specific in what we reject (filtering by TpId
             -- rather than entire path)
@@ -199,7 +216,7 @@ relay vs = waitThenFwdOnly fwd
             cid = genInitDigest gets postTypeGets typeGets vs
             cid' = cid{ocdErrors =
               Map.unionWith (<>) (ocdErrors cid) (fmap (Text.pack . show) <$> errMap)}
-            opd = OutboundProviderDigest contOps'' dd''
+            opd = OutboundProviderDigest dels contOps'' dd''
           in do
             unless (ocdNull cid') $ sendRev (i, Ocid cid')
             unless (opdNull opd) $ sendRev (i, Opd opd)
@@ -210,13 +227,14 @@ relay vs = waitThenFwdOnly fwd
 
 -- FIXME: Worst case implementation
 vsMinimiseDefinitions
-  :: Map TypeName (DefOp def) -> Valuespace -> Map TypeName (DefOp def)
+  :: Map (Tagged def TypeName) (DefOp def) -> Valuespace
+  -> Map (Tagged def TypeName) (DefOp def)
 vsMinimiseDefinitions defs _ = defs
 
 -- FIXME: Worst case implementation
-vsMinimiseDataDigest :: DataDigest -> Valuespace -> DataDigest
+vsMinimiseDataDigest :: DataDigest ar -> Valuespace -> DataDigest ar
 vsMinimiseDataDigest dd _ = dd
 
 -- FIXME: Worst case implementation
-vsMinimiseContOps :: ContainerOps -> Valuespace -> ContainerOps
+vsMinimiseContOps :: ContainerOps ar -> Valuespace -> ContainerOps ar
 vsMinimiseContOps contOps _ = contOps

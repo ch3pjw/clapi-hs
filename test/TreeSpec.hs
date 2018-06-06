@@ -1,7 +1,3 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
-{-# LANGUAGE OverloadedStrings, QuasiQuotes #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE TupleSections #-}
 module TreeSpec where
 
 import Test.Hspec
@@ -43,8 +39,9 @@ spec = do
   describe "treeLookup" $ do
     it "should find a node that is present" $
       treeLookup (Root :/ s3 :/ s1) t4 `shouldBe` Just t1
-    it "should return Nothing if no node is present" $
-      treeLookup [pathq|/naff|] t4 `shouldBe` Nothing
+    it "should return Nothing if no node is present" $ do
+      treeLookup [ap|/naff|] t4 `shouldBe` Nothing
+      treeLookup [rp|./naff|] t4 `shouldBe` Nothing
 
   describe "treeInsert" $  do
     it "should insert the node" $
@@ -68,7 +65,7 @@ spec = do
     it "should recursively add containers as needed" $
       let
         att = Just "bob"
-        t = treeInsert att ([pathq|/will/bo|]) t0 t1
+        t = treeInsert att ([ap|/will/bo|]) t0 t1
         expectedT = RtContainer $ alSingleton [segq|will|]
           (att, RtContainer $ alSingleton [segq|bo|] (att, t0))
       in
@@ -76,8 +73,8 @@ spec = do
 
   describe "treeDelete" $ do
     it "should delete something that isn't there" $ do
-      treeDelete [pathq|/will|] t4 `shouldBe` t4
-      treeDelete [pathq|/will|] t1 `shouldBe` t1
+      treeDelete [ap|/will|] t4 `shouldBe` t4
+      treeDelete [ap|/will|] t1 `shouldBe` t1
     it "should delete recursively" $
       treeDelete (Root :/ s3 :/ s1) t4 `shouldBe` RtContainer (alFromList
         [ (s3, (Nothing, RtContainer $ alFromList
@@ -85,5 +82,5 @@ spec = do
         , (s1, (Nothing, t1))
         ])
     it "doesn't create illegitimate parents" $ do
-      treeDelete [pathq|/t3/to/box|] t3 `shouldBe` t3
-      treeDelete [pathq|/t1/to/box|] t3 `shouldBe` t3
+      treeDelete [ap|/t3/to/box|] t3 `shouldBe` t3
+      treeDelete [ap|/t1/to/box|] t3 `shouldBe` t3

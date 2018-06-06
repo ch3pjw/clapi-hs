@@ -1,8 +1,5 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
-
 module Clapi.Types.SequenceOps
-  ( SequenceOp(..), isSoAbsent
-  , updateUniqList
+  ( reorderUniqList
   ) where
 
 import Prelude hiding (fail)
@@ -12,34 +9,7 @@ import qualified Data.Map as Map
 import qualified Data.List as List
 import Data.Foldable (foldlM)
 
-import Clapi.Types.UniqList
-  (UniqList, unUniqList, mkUniqList, ulDelete, ulInsert)
-import Clapi.Util (ensureUnique)
-
-data SequenceOp i
-  = SoPresentAfter (Maybe i)
-  | SoAbsent
-  deriving (Show, Eq)
-
-isSoAbsent :: SequenceOp i -> Bool
-isSoAbsent so = case so of
-  SoAbsent -> True
-  _ -> False
-
-updateUniqList
-  :: (Eq i, Ord i, Show i, MonadFail m)
-  => Map i (SequenceOp i) -> UniqList i -> m (UniqList i)
-updateUniqList ops ul = do
-    ensureUnique "flange" $ Map.elems reorders
-    reorderFromDeps reorders $ Map.foldlWithKey foo ul ops
-  where
-    foo ul' i op = case op of
-      SoPresentAfter _ -> ulInsert i ul'
-      SoAbsent -> ulDelete i ul'
-    reorders = Map.foldlWithKey bar mempty ops
-    bar acc i op = case op of
-      SoPresentAfter mi -> Map.insert i mi acc
-      SoAbsent -> acc
+import Clapi.Types.UniqList (UniqList, unUniqList, mkUniqList)
 
 getChainStarts ::
     Ord i => Map i (Maybe i) -> ([(i, Maybe i)], Map i (Maybe i))
@@ -49,10 +19,10 @@ getChainStarts m =
         (remainder, starts) = Map.partition hasUnresolvedDep m
     in (Map.toList starts, remainder)
 
-reorderFromDeps
+reorderUniqList
     :: (MonadFail m, Ord i, Show i)
     => Map i (Maybe i) -> UniqList i -> m (UniqList i)
-reorderFromDeps m ul =
+reorderUniqList m ul =
     resolveDigest m >>= applyMoves (unUniqList ul) >>= mkUniqList
   where
     resolveDigest m' = if null m' then return []

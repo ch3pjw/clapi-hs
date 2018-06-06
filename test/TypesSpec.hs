@@ -1,11 +1,10 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 {-# LANGUAGE
     ExistentialQuantification
-  , OverloadedStrings
+  , GeneralizedNewtypeDeriving
   , Rank2Types
-  , ScopedTypeVariables
+  , StandaloneDeriving
   , TemplateHaskell
-  , TypeApplications
 #-}
 
 module TypesSpec where
@@ -17,10 +16,10 @@ import Test.QuickCheck
 
 import System.Random (Random)
 import Data.Maybe (fromJust)
-import Control.Monad (replicateM, liftM2)
+import Control.Monad (liftM2)
 import Control.Monad.Fail (MonadFail)
-import Data.List (inits)
 import Data.Proxy
+import Data.Tagged (Tagged(..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word8, Word32, Word64)
@@ -28,43 +27,23 @@ import Data.Int (Int32, Int64)
 
 import Clapi.TextSerialisation (argsOpen, argsClose)
 import Clapi.Types
-  ( Time(..), WireValue(..), WireType(..), Wireable, castWireValue, Liberty
+  ( Time(..), WireValue(..), WireType(..), Wireable, castWireValue, Editable
   , InterpolationLimit, PostDefinition(..), Definition(..), StructDefinition(..)
   , TupleDefinition(..), ArrayDefinition(..), AssocList, alFromMap
   , wireValueWireType, withWtProxy, Required)
 import Clapi.Util (proxyF, proxyF3)
 
 import Clapi.Types.Tree (TreeType(..), Bounds, bounds, ttEnum)
-import Clapi.Types.Path (Seg, Path(..), mkSeg, TypeName(..))
+import Clapi.Types.Path (Qualified(..),)
 import Clapi.Types.WireTH (mkWithWtProxy)
 
-smallListOf :: Gen a -> Gen [a]
-smallListOf g = do
-  l <- choose (0, 5)
-  replicateM l g
+import Arbitrary (smallListOf)
+import PathSpec ()
 
-smallListOf1 :: Gen a -> Gen [a]
-smallListOf1 g = do
-  l <- choose (1, 5)
-  replicateM l g
+instance Arbitrary a => Arbitrary (Qualified a) where
+  arbitrary = Qualified <$> arbitrary <*> arbitrary
 
-maybeOf :: Gen a -> Gen (Maybe a)
-maybeOf g = oneof [return Nothing, Just <$> g]
-
-name :: Gen Seg
-name = fromJust . mkSeg . Text.pack <$> smallListOf1 (elements ['a'..'z'])
-
-instance Arbitrary Seg where
-  arbitrary = name
-
-instance Arbitrary Path where
-  arbitrary = Path <$> smallListOf name
-  shrink (Path names) = fmap Path . drop 1 . reverse . inits $ names
-
-instance Arbitrary TypeName where
-  arbitrary = TypeName <$> arbitrary <*> arbitrary
-
-instance Arbitrary Liberty where
+instance Arbitrary Editable where
     arbitrary = arbitraryBoundedEnum
 
 instance Arbitrary Required where
@@ -165,11 +144,13 @@ instance Arbitrary Definition where
       do
         oneof
           [ TupleDef <$>
-              (TupleDefinition <$> arbitraryTextNoNull <*> arbitrary <*> arbitrary)
+              (TupleDefinition <$> arbitraryTextNoNull <*> arbitrary
+               <*> arbitrary)
           , StructDef <$>
               (StructDefinition <$> arbitraryTextNoNull <*> arbitrary)
           , ArrayDef <$>
-              (ArrayDefinition <$> arbitraryTextNoNull <*> arbitrary <*> arbitrary)
+              (ArrayDefinition <$> arbitraryTextNoNull <*> arbitrary
+               <*> arbitrary <*> arbitrary)
           ]
 
 instance (Ord a, Random a, Arbitrary a) => Arbitrary (Bounds a) where
@@ -207,3 +188,5 @@ instance Arbitrary TreeType where
 
 
 data TestEnum = TestOne | TestTwo | TestThree deriving (Show, Eq, Ord, Enum, Bounded)
+
+deriving instance Arbitrary a => Arbitrary (Tagged t a)

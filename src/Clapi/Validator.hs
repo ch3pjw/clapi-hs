@@ -1,25 +1,26 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE
+    DataKinds
+  , Rank2Types
+#-}
 
 module Clapi.Validator where
 
 import Prelude hiding (fail)
 import Control.Monad.Fail (MonadFail(..))
 import Control.Monad (void)
+import Data.Bifunctor (first)
 import Data.Word (Word8)
 import Data.Monoid ((<>))
 import Data.Proxy
+import Data.Tagged (Tagged(..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Text.Regex.PCRE ((=~~))
 import Text.Printf (printf, PrintfArg)
 
 import Clapi.Util (ensureUnique)
-import Clapi.Types (WireValue, Time, Wireable, cast', castWireValue)
-import Clapi.Types.Path (Seg, Path, TypeName)
+import Clapi.Types (WireValue, Time, Wireable, cast', castWireValue, Definition)
+import Clapi.Types.Path (Seg, Path, TypeName, AbsRel(..))
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Tree (Bounds, boundsMin, boundsMax, TreeType(..))
 import Clapi.Types.TreeTypeProxy (withTtProxy)
@@ -38,39 +39,41 @@ inBounds b n = go (boundsMin b) (boundsMax b)
     go (Just lo) (Just hi) = gte lo >> lte hi
 
 extractTypeAssertions
-  :: MonadFail m => TreeType -> WireValue -> m [(TypeName, Path)]
-extractTypeAssertions tt = withWireable (extractTypeAssertions' tt) tt
+  :: MonadFail m
+  => TreeType -> WireValue -> m [(Tagged Definition TypeName, Path 'Abs)]
+extractTypeAssertions tt = fmap (fmap $ first Tagged) .
+  withWireable (extractTypeAssertions' tt) tt
 
 extractTypeAssertions'
   :: forall a m . (Wireable a, MonadFail m)
-  => TreeType -> a -> m [(TypeName, Path)]
+  => TreeType -> a -> m [(TypeName, Path 'Abs)]
 extractTypeAssertions' tt a = case tt of
-  TtRef tn -> cast' a >>= Path.fromText >>= return . pure . (tn,)
+  TtRef tn -> cast' a >>= Path.absPathFromText >>= return . pure . (tn,)
   -- FIXME: this need some factoring!
   TtList tt' ->
     let
-      g :: forall b. Wireable b => Proxy b -> m [(TypeName, Path)]
+      g :: forall b. Wireable b => Proxy b -> m [(TypeName, Path 'Abs)]
       g _ = cast' @[b] a >>=
         mapM (extractTypeAssertions' tt') >>= return . foldMap id
     in
       withTtProxy tt' g
   TtSet tt' ->
     let
-      g :: forall b. Wireable b => Proxy b -> m [(TypeName, Path)]
+      g :: forall b. Wireable b => Proxy b -> m [(TypeName, Path 'Abs)]
       g _ = cast' @[b] a >>=
         mapM (extractTypeAssertions' tt') >>= return . foldMap id
     in
       withTtProxy tt' g
   TtOrdSet tt' ->
     let
-      g :: forall b. Wireable b => Proxy b -> m [(TypeName, Path)]
+      g :: forall b. Wireable b => Proxy b -> m [(TypeName, Path 'Abs)]
       g _ = cast' @[b] a >>=
         mapM (extractTypeAssertions' tt') >>= return . foldMap id
     in
       withTtProxy tt' g
   TtMaybe tt' ->
     let
-      g :: forall b. Wireable b => Proxy b -> m [(TypeName, Path)]
+      g :: forall b. Wireable b => Proxy b -> m [(TypeName, Path 'Abs)]
       g _ = cast' @(Maybe b) a >>=
         mapM (extractTypeAssertions' tt') >>= return . foldMap id
     in
@@ -78,7 +81,7 @@ extractTypeAssertions' tt a = case tt of
   TtPair tt1 tt2 ->
     let
       g :: forall b c. (Wireable b, Wireable c)
-        => Proxy b -> Proxy c -> m [(TypeName, Path)]
+        => Proxy b -> Proxy c -> m [(TypeName, Path 'Abs)]
       g _ _ = cast' @(b, c) a >>=
         bimapM (extractTypeAssertions' tt1) (extractTypeAssertions' tt2) >>=
         \(r1, r2) -> return (r1 <> r2)
@@ -97,7 +100,7 @@ validate' tt a = case tt of
     TtFloat b -> checkWith $ inBounds b
     TtDouble b -> checkWith $ inBounds b
     TtString r -> checkWith $ checkString r
-    TtRef _ -> checkWith Path.fromText
+    TtRef _ -> checkWith Path.absPathFromText
     TtList tt1 -> withTtProxy tt1 $ checkListWith @[] tt1 pure
     TtSet tt1 -> withTtProxy tt1 $
       checkListWith @[] tt1 $ ensureUnique "items"

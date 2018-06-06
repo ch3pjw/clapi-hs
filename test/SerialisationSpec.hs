@@ -1,6 +1,8 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE PatternSynonyms #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
+{-# LANGUAGE
+    FlexibleContexts
+  , UndecidableInstances
+#-}
 
 module SerialisationSpec where
 
@@ -21,17 +23,19 @@ import Clapi.Types
   ( Time, Attributee, WireValue
   , Interpolation(..), SubMessage(..), DataUpdateMessage(..), TypeMessage(..)
   , PostMessage(..), MsgError(..), TpId, DefMessage(..)
-  , ContainerUpdateMessage(..)
+  , ContainerUpdateMessage(..), DeleteMessage(..)
   , ToRelayClientBundle(..), ToRelayProviderBundle(..)
   , FromRelayClientBundle(..), FromRelayProviderBundle(..)
   , FromRelayProviderErrorBundle(..), ToRelayProviderRelinquish(..)
   , ToRelayBundle(..), FromRelayBundle(..)
   , ErrorIndex(..))
-import Clapi.Types.Path (Path(..), pattern Root)
+import Clapi.Types.Messages (EiAbsRel)
+import Clapi.Types.Path (Path(..))
 import Clapi.Serialisation (Encodable(..))
 
+import Arbitrary (smallListOf)
 -- Incl. Arbitrary instances of WireValue:
-import TypesSpec (smallListOf, arbitraryTextNoNull)
+import TypesSpec (arbitraryTextNoNull)
 
 encode :: (MonadFail m, Encodable a) => a -> m ByteString
 encode x = toByteString <$> builder x
@@ -64,48 +68,50 @@ instance Arbitrary SubMessage where
 instance Arbitrary TypeMessage where
   arbitrary = MsgAssignType <$> arbitrary <*> arbitrary <*> arbitrary
 
-instance Arbitrary PostMessage where
+instance Arbitrary (Path ar) => Arbitrary (PostMessage ar) where
   arbitrary = MsgPost <$> arbitrary <*> arbitrary <*>
     (Map.fromList <$> smallListOf arbitrary)
 
 genAttributee :: Gen (Maybe Attributee)
 genAttributee = oneof [return Nothing, Just <$> arbitraryTextNoNull]
 
-instance Arbitrary DataUpdateMessage where
+instance Arbitrary (Path ar) => Arbitrary (DataUpdateMessage ar) where
   arbitrary = oneof
     [ MsgConstSet
-      <$> (arbitrary :: Gen Path)
-      <*> (smallListOf arbitrary :: Gen [WireValue])
+      <$> (arbitrary @(Path ar))
+      <*> (smallListOf $ arbitrary @WireValue)
       <*> genAttributee
     , MsgSet
-      <$> (arbitrary :: Gen Path)
-      <*> (arbitrary :: Gen TpId)
-      <*> (arbitrary :: Gen Time)
-      <*> (smallListOf arbitrary :: Gen [WireValue])
-      <*> (arbitrary :: Gen Interpolation)
+      <$> (arbitrary @(Path ar))
+      <*> (arbitrary @TpId)
+      <*> (arbitrary @Time)
+      <*> (smallListOf $ arbitrary @WireValue)
+      <*> (arbitrary @Interpolation)
       <*> genAttributee
     , MsgRemove
-      <$> (arbitrary :: Gen Path)
-      <*> (arbitrary :: Gen TpId)
+      <$> (arbitrary @(Path ar))
+      <*> (arbitrary @TpId)
       <*> genAttributee
     ]
-  shrink (MsgConstSet Root [] Nothing) = []
+  shrink (MsgConstSet _ [] Nothing) = []
   shrink (MsgConstSet p vs a) =
     [MsgConstSet p' vs' a' | (p', vs', a') <- shrink (p, vs, a)]
-  shrink (MsgSet (Path []) _ _ [] _ Nothing) = []
+  shrink (MsgSet _ _ _ [] _ Nothing) = []
   shrink (MsgSet p tpid t vs i a) =
     [MsgSet p' tpid t vs' i a' | (p', vs', a') <- shrink (p, vs, a)]
-  shrink (MsgRemove (Path []) _ Nothing) = []
+  shrink (MsgRemove _ _ Nothing) = []
   shrink (MsgRemove p t a) = [MsgRemove p' t a' | (p', a') <- shrink (p, a)]
 
 
-instance Arbitrary ContainerUpdateMessage where
-  arbitrary = oneof
-    [ MsgPresentAfter <$> arbitrary <*> arbitrary <*> arbitrary <*> genAttributee
-    , MsgAbsent <$> arbitrary <*> arbitrary <*> genAttributee
-    ]
+instance Arbitrary (Path ar) => Arbitrary (ContainerUpdateMessage ar) where
+  arbitrary = MsgMoveAfter <$> arbitrary <*> arbitrary <*> arbitrary
+    <*> genAttributee
 
-instance Arbitrary a => Arbitrary (ErrorIndex a) where
+instance Arbitrary (Path ar) => Arbitrary (DeleteMessage ar) where
+  arbitrary = MsgDelete <$> arbitrary <*> arbitrary
+
+instance (Arbitrary a, Arbitrary (Path (EiAbsRel a)))
+    => Arbitrary (ErrorIndex a) where
   arbitrary = oneof
     [ return GlobalError
     , PathError <$> arbitrary
@@ -114,7 +120,8 @@ instance Arbitrary a => Arbitrary (ErrorIndex a) where
     , TypeError <$> arbitrary
     ]
 
-instance Arbitrary a => Arbitrary (MsgError a) where
+instance (Arbitrary a, Arbitrary (Path (EiAbsRel a)))
+    => Arbitrary (MsgError a) where
   arbitrary = MsgError <$> arbitrary <*> arbitraryTextNoNull
 
 
@@ -122,15 +129,15 @@ instance Arbitrary ToRelayProviderBundle where
   arbitrary = ToRelayProviderBundle
     <$> arbitrary <*> smallListOf arbitrary <*> smallListOf arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
-    <*> smallListOf arbitrary
-  shrink (ToRelayProviderBundle n e pt t d c) =
-    [ToRelayProviderBundle n e' pt' t' d' c' |
-       (e', pt', t', d', c') <- shrink (e, pt, t, d, c)]
+    <*> smallListOf arbitrary <*> smallListOf arbitrary
+  shrink (ToRelayProviderBundle n e pt t dels d c) =
+    [ToRelayProviderBundle n e' pt' t' dels' d' c' |
+       (e', pt', t', dels', d', c') <- shrink (e, pt, t, dels, d, c)]
 
 instance Arbitrary FromRelayProviderBundle where
   arbitrary = FromRelayProviderBundle <$> arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
-    <*> smallListOf arbitrary
+    <*> smallListOf arbitrary <*> smallListOf arbitrary
 
 instance Arbitrary ToRelayProviderRelinquish where
   arbitrary = ToRelayProviderRelinquish <$> arbitrary
@@ -141,9 +148,10 @@ instance Arbitrary FromRelayProviderErrorBundle where
 instance Arbitrary ToRelayClientBundle where
   arbitrary = ToRelayClientBundle <$> smallListOf arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
-    <*> smallListOf arbitrary
-  shrink (ToRelayClientBundle s p d c) =
-    [ToRelayClientBundle s' p' d' c' | (s', p', d', c') <- shrink (s, p, d, c)]
+    <*> smallListOf arbitrary <*> smallListOf arbitrary
+  shrink (ToRelayClientBundle s dels p d c) =
+    [ToRelayClientBundle s' dels' p' d' c'
+    | (s', dels', p', d', c') <- shrink (s, dels, p, d, c)]
 
 instance Arbitrary FromRelayClientBundle where
   arbitrary = FromRelayClientBundle <$> smallListOf arbitrary
@@ -151,10 +159,11 @@ instance Arbitrary FromRelayClientBundle where
     <*> smallListOf arbitrary <*> smallListOf arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
     <*> smallListOf arbitrary <*> smallListOf arbitrary
-  shrink (FromRelayClientBundle ptu tu du e postDefs defs tas dd c) =
-    [FromRelayClientBundle ptu' tu' du' e' postDefs' defs' tas' dd' c'
-    | (ptu', tu', du', e', postDefs', defs', tas', dd', c')
-    <- shrink (ptu, tu, du, e, postDefs, defs, tas, dd, c)]
+    <*> smallListOf arbitrary
+  shrink (FromRelayClientBundle ptu tu du e postDefs defs tas dels dd c) =
+    [FromRelayClientBundle ptu' tu' du' e' postDefs' defs' tas' dels' dd' c'
+    | (ptu', tu', du', e', postDefs', defs', tas', dels', dd', c')
+    <- shrink (ptu, tu, du, e, postDefs, defs, tas, dels, dd, c)]
 
 
 instance Arbitrary ToRelayBundle where

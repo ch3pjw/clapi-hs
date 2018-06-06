@@ -1,32 +1,34 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE TypeApplications #-}
-
+{-# LANGUAGE
+    DataKinds
+#-}
 module Clapi.RelayApi (relayApiProto, PathSegable(..)) where
 
-import Data.Text (Text)
 import Control.Monad.Trans (lift)
+import Data.Bifunctor (bimap)
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Tagged (Tagged(..))
+import Data.Text (Text)
 import qualified Data.Text as Text
 
 import Clapi.PerClientProto (ClientEvent(..), ServerEvent(..))
 import Clapi.Types
   ( TrDigest(..), TrpDigest(..), FrDigest(..), FrpDigest(..), WireValue(..)
-  , TimeStamped(..), Liberty(..))
+  , TimeStamped(..), Editable(..))
 import Clapi.Types.AssocList (alSingleton, alFromMap, alFmapWithKey, alFromList)
-import Clapi.Types.Base (InterpolationLimit(ILUninterpolated))
+import Clapi.Types.Base (InterpolationLimit(ILUninterpolated), Attributee)
 import Clapi.Types.Definitions (tupleDef, structDef, arrayDef)
-import Clapi.Types.Digests (DefOp(OpDefine), DataChange(..), FrcDigest(..))
-import Clapi.Types.SequenceOps (SequenceOp(..))
-import Clapi.Types.Path (Seg, TypeName(..), pattern Root, pattern (:/), pattern (:</))
+import Clapi.Types.Digests
+  (DefOp(OpDefine), DataChange(..), FrcDigest(..), DataDigest)
+import Clapi.Types.Path
+  ( Seg, typeName, tTypeName, pattern Root, pattern (:/), Namespace(..)
+  , AbsRel(..), mkAbsPath, AbsRelPath(..))
+import Clapi.Types.Path (Path)
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Tree (TreeType(..), unbounded)
 import Clapi.Types.Wire (castWireValue)
 import Clapi.Protocol (Protocol, waitThen, sendFwd, sendRev)
-import Clapi.TH (pathq, segq)
+import Clapi.TH (ap, rp, segq)
 import Clapi.TimeDelta (tdZero, getDelta, TimeDelta(..))
 import Clapi.Valuespace (apiNs, dnSeg)
 
@@ -34,11 +36,13 @@ class PathSegable a where
     pathNameFor :: a -> Seg
 
 relayApiProto ::
-    (Ord i, PathSegable i) =>
+    forall i. (Ord i, PathSegable i) =>
     i ->
     Protocol
-        (ClientEvent i (TimeStamped TrDigest)) (ClientEvent i TrDigest)
-        (ServerEvent i FrDigest) (Either (Map Seg i) (ServerEvent i FrDigest))
+        (ClientEvent i (TimeStamped TrDigest))
+        (ClientEvent i TrDigest)
+        (ServerEvent i FrDigest)
+        (Either (Map Namespace i) (ServerEvent i FrDigest))
         IO ()
 relayApiProto selfAddr =
     publishRelayApi >> steadyState mempty mempty
@@ -46,7 +50,7 @@ relayApiProto selfAddr =
     publishRelayApi = sendFwd $ ClientData selfAddr $ Trpd $ TrpDigest
       rns
       mempty
-      (Map.fromList $ fmap OpDefine <$>
+      (Map.fromList $ bimap Tagged OpDefine <$>
         [ ([segq|build|], tupleDef "builddoc"
              (alSingleton [segq|commit_hash|] $ TtString "banana")
              ILUninterpolated)
@@ -56,31 +60,35 @@ relayApiProto selfAddr =
              ILUninterpolated)
         , ([segq|client_info|], structDef
              "Info about a single connected client" $ staticAl
-             [ (dnSeg, (TypeName apiNs dnSeg, May))
-             , (clock_diff, (TypeName rns clock_diff, Cannot))
+             [ (dnSeg, (tTypeName apiNs dnSeg, Editable))
+             , (clock_diff, (tTypeName rns clock_diff, ReadOnly))
              ])
         , ([segq|clients|], arrayDef "Info about the connected clients"
-             (TypeName rns [segq|client_info|]) Cannot)
+             Nothing
+             (tTypeName rns [segq|client_info|]) ReadOnly)
         , ([segq|owner_info|], tupleDef "owner info"
              (alSingleton [segq|owner|]
-               $ TtRef $ TypeName rns [segq|client_info|])
+               -- FIXME: want to make Ref's TypeName tagged...
+               $ TtRef $ typeName rns [segq|client_info|])
              ILUninterpolated)
         , ([segq|owners|], arrayDef "ownersdoc"
-             (TypeName rns [segq|owner_info|]) Cannot)
+             Nothing
+             (tTypeName rns [segq|owner_info|]) ReadOnly)
         , ([segq|self|], tupleDef "Which client you are"
              (alSingleton [segq|info|]
-               $ TtRef $ TypeName rns [segq|client_info|])
+               $ TtRef $ typeName rns [segq|client_info|])
              ILUninterpolated)
         , ([segq|relay|], structDef "topdoc" $ staticAl
-          [ ([segq|build|], (TypeName rns [segq|build|], Cannot))
-          , ([segq|clients|], (TypeName rns [segq|clients|], Cannot))
-          , ([segq|owners|], (TypeName rns [segq|owners|], Cannot))
-          , ([segq|self|], (TypeName rns [segq|self|], Cannot))])
+          [ ([segq|build|], (tTypeName rns [segq|build|], ReadOnly))
+          , ([segq|clients|], (tTypeName rns [segq|clients|], ReadOnly))
+          , ([segq|owners|], (tTypeName rns [segq|owners|], ReadOnly))
+          , ([segq|self|], (tTypeName rns [segq|self|], ReadOnly))])
         ])
+      mempty
       (alFromList
-        [ ([pathq|/build|], ConstChange Nothing [WireValue @Text "banana"])
-        , ([pathq|/self|], ConstChange Nothing [
-             WireValue $ Path.toText $ selfSeg :</ selfClientPath])
+        [ ([rp|./build|], ConstChange Nothing [WireValue @Text "banana"])
+        , ([rp|./self|], ConstChange Nothing [
+             WireValue $ Path.toText $ mkAbsPath rns selfClientPath])
         , ( selfClientPath :/ clock_diff
           , ConstChange Nothing [WireValue @Float 0.0])
         , ( selfClientPath :/ dnSeg
@@ -88,11 +96,18 @@ relayApiProto selfAddr =
         ])
       mempty
       mempty
-    rns = [segq|relay|]
+    rns = Namespace [segq|relay|]
     clock_diff = [segq|clock_diff|]
     selfSeg = pathNameFor selfAddr
-    selfClientPath = Root :/ [segq|clients|] :/ selfSeg
+    selfClientPath = emptyPath :/ [segq|clients|] :/ selfSeg
     staticAl = alFromMap . Map.fromList
+    steadyState
+      :: Map Seg TimeDelta -> Map Namespace Seg -> Protocol
+            (ClientEvent i (TimeStamped TrDigest))
+            (ClientEvent i TrDigest)
+            (ServerEvent i FrDigest)
+            (Either (Map Namespace i) (ServerEvent i FrDigest))
+            IO ()
     steadyState timingMap ownerMap = waitThen fwd rev
       where
         fwd ce = case ce of
@@ -103,9 +118,9 @@ relayApiProto selfAddr =
             in do
               sendFwd (ClientConnect displayName cAddr)
               pubUpdate (alFromList
-                [ ( [pathq|/clients|] :/ cSeg :/ clock_diff
+                [ ( [rp|./clients|] :/ cSeg :/ clock_diff
                   , ConstChange Nothing [WireValue $ unTimeDelta tdZero])
-                , ( [pathq|/clients|] :/ cSeg :/ dnSeg
+                , ( [rp|./clients|] :/ cSeg :/ dnSeg
                   , ConstChange Nothing [WireValue $ Text.pack displayName])
                 ])
                 mempty
@@ -116,7 +131,7 @@ relayApiProto selfAddr =
             -- pipeline, it'd be less jittery and tidy this up
             delta <- lift $ getDelta theirTime
             let timingMap' = Map.insert cSeg delta timingMap
-            pubUpdate (alSingleton ([pathq|/clients|] :/ cSeg :/ clock_diff)
+            pubUpdate (alSingleton ([rp|./clients|] :/ cSeg :/ clock_diff)
               $ ConstChange Nothing [WireValue $ unTimeDelta delta])
               mempty
             sendFwd $ ClientData cAddr d
@@ -129,13 +144,12 @@ relayApiProto selfAddr =
             timingMap' = Map.delete cSeg timingMap
             -- FIXME: This feels a bit like reimplementing some of the NST
             ownerMap' = Map.filter (/= cSeg) ownerMap
-            (dd, cops) = ownerChangeInfo ownerMap'
+            (dd, dels) = ownerChangeInfo ownerMap'
           in do
-            pubUpdate dd $ Map.insert [pathq|/clients|]
-              (Map.singleton cSeg (Nothing, SoAbsent)) cops
+            pubUpdate dd $ Map.insert ([rp|./clients|] :/ cSeg) Nothing dels
             steadyState timingMap' ownerMap'
-        pubUpdate dd co = sendFwd $ ClientData selfAddr $ Trpd $ TrpDigest
-          rns mempty mempty dd co mempty
+        pubUpdate dd dels = sendFwd $ ClientData selfAddr $ Trpd $ TrpDigest
+          rns mempty mempty dels dd mempty mempty
         rev (Left ownerAddrs) = do
           let ownerMap' = pathNameFor <$> ownerAddrs
           if elem selfAddr $ Map.elems ownerAddrs
@@ -143,7 +157,8 @@ relayApiProto selfAddr =
               uncurry pubUpdate $ ownerChangeInfo ownerMap'
               steadyState timingMap ownerMap'
             else
-              return () -- The relay API did something invalid and got kicked out
+              -- The relay API did something invalid and got kicked out
+              return ()
         rev (Right se) = do
           case se of
             ServerData cAddr d ->
@@ -157,12 +172,16 @@ relayApiProto selfAddr =
                 _ -> sendRev se
             _ -> sendRev se
           steadyState timingMap ownerMap
+        ownerChangeInfo
+          :: Map Namespace Seg
+          -> (DataDigest 'Rel, Map (Path 'Rel) (Maybe Attributee))
         ownerChangeInfo ownerMap' =
             ( alFromMap $ Map.mapKeys toOwnerPath $ toSetRefOp <$> ownerMap'
-            , Map.singleton [pathq|/owners|] $
-                (const (Nothing, SoAbsent)) <$>
-                  ownerMap `Map.difference` ownerMap')
-        toOwnerPath s = [pathq|/owners|] :/ s
+            , Map.mapKeys (([rp|./owners|] :/) . unNamespace) $
+                const Nothing <$>
+                ownerMap `Map.difference` ownerMap')
+        toOwnerPath :: Namespace -> Path 'Rel
+        toOwnerPath s = [rp|./owners|] :/ unNamespace s
         toSetRefOp ns = ConstChange Nothing [
           WireValue $ Path.toText $ Root :/ selfSeg :/ [segq|clients|] :/ ns]
         viewAs i dd =
@@ -176,14 +195,14 @@ relayApiProto selfAddr =
               $ castWireValue wv
             alterTime _ = error "Weird data back out of VS"
             fiddleDataChanges p dc
-              | p `Path.isChildOf` [pathq|/relay/clients|] = alterTime dc
-              | p == [pathq|/relay/self|] = toSetRefOp theirSeg
+              | p `Path.isChildOf` [ap|/relay/clients|] = alterTime dc
+              | p == [ap|/relay/self|] = toSetRefOp theirSeg
               | otherwise = dc
           in
             alFmapWithKey fiddleDataChanges dd
         -- This function trusts that the valuespace has completely validated the
         -- actions the client can perform (i.e. can only change the name of a
         -- client)
-        handleApiRequest (FrpDigest ns posts dd cops) =
+        handleApiRequest (FrpDigest ns dels posts dd cops) =
           sendFwd $ ClientData selfAddr $ Trpd $
-          TrpDigest ns mempty mempty dd cops mempty
+          TrpDigest ns mempty mempty dels dd cops mempty

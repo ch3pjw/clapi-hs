@@ -1,6 +1,10 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
+{-# LANGUAGE
+    TypeSynonymInstances
+  , FlexibleContexts
+  , FlexibleInstances
+  , UndecidableInstances
+#-}
 
 module Clapi.Serialisation.Messages where
 
@@ -17,6 +21,7 @@ import Clapi.Serialisation.Definitions ()
 import Clapi.Serialisation.Path ()
 import Clapi.TH (btq)
 import Clapi.Types.Messages
+import Clapi.Types.Path (Path)
 import Clapi.TaggedData (TaggedData, taggedData)
 import Clapi.Serialisation.Wire ()
 
@@ -44,7 +49,8 @@ errIdxTaggedData = taggedData typeToTag eiToType
       PostTypeError _ -> EitPostTypeName
       TypeError _ -> EitTypeName
 
-instance Encodable a => Encodable (ErrorIndex a) where
+instance (Encodable a, Encodable (Path (EiAbsRel a)))
+    => Encodable (ErrorIndex a) where
   builder = tdTaggedBuilder errIdxTaggedData $ \ei -> case ei of
     GlobalError -> return mempty
     PathError p -> builder p
@@ -59,9 +65,10 @@ instance Encodable a => Encodable (ErrorIndex a) where
     EitTypeName -> TypeError <$> parser
 
 
-instance Encodable a => Encodable (MsgError a) where
-    builder (MsgError ei s) = builder ei <<>> builder s
-    parser = MsgError <$> parser <*> parser
+instance (Encodable a, Encodable (Path (EiAbsRel a)))
+    => Encodable (MsgError a) where
+  builder (MsgError ei s) = builder ei <<>> builder s
+  parser = MsgError <$> parser <*> parser
 
 data DefMsgType = DefMsgTDef | DefMsgTUndef deriving (Enum, Bounded)
 
@@ -129,9 +136,13 @@ instance Encodable TypeMessage where
     builder (MsgAssignType p tn l) = builder p <<>> builder tn <<>> builder l
     parser = MsgAssignType <$> parser <*> parser <*> parser
 
-instance Encodable PostMessage where
+instance Encodable (Path ar) => Encodable (PostMessage ar) where
     builder (MsgPost p ph args) = builder p <<>> builder ph <<>> builder args
     parser = MsgPost <$> parser <*> parser <*> parser
+
+instance Encodable (Path ar) => Encodable (DeleteMessage ar) where
+    builder (MsgDelete p att) = builder p <<>> builder att
+    parser = MsgDelete <$> parser <*> parser
 
 data DataUpdateMsgType
   = DUMTConstSet
@@ -139,7 +150,7 @@ data DataUpdateMsgType
   | DUMTRemove
   deriving (Enum, Bounded)
 
-dumtTaggedData :: TaggedData DataUpdateMsgType DataUpdateMessage
+dumtTaggedData :: TaggedData DataUpdateMsgType (DataUpdateMessage ar)
 dumtTaggedData = taggedData typeToTag msgToType
   where
     typeToTag DUMTConstSet = [btq|S|]
@@ -149,13 +160,16 @@ dumtTaggedData = taggedData typeToTag msgToType
     msgToType (MsgSet {}) = DUMTSet
     msgToType (MsgRemove {}) = DUMTRemove
 
-dumtParser :: DataUpdateMsgType -> Parser DataUpdateMessage
+dumtParser
+  :: Encodable (Path ar) => DataUpdateMsgType -> Parser (DataUpdateMessage ar)
 dumtParser e = case e of
     DUMTConstSet -> MsgConstSet <$> parser <*> parser <*> parser
-    DUMTSet -> MsgSet <$> parser <*> parser <*> parser <*> parser <*> parser <*> parser
+    DUMTSet -> MsgSet <$> parser <*> parser <*> parser <*> parser <*> parser
+      <*> parser
     DUMTRemove -> MsgRemove <$> parser <*> parser <*> parser
 
-dumtBuilder :: MonadFail m => DataUpdateMessage -> m Builder
+dumtBuilder
+  :: (Encodable (Path ar), MonadFail m) => DataUpdateMessage ar -> m Builder
 dumtBuilder m = case m of
     MsgConstSet p v a -> builder p <<>> builder v <<>> builder a
     MsgSet p ptId t v i a ->
@@ -164,40 +178,14 @@ dumtBuilder m = case m of
     MsgRemove p t a ->
       builder p <<>> builder t <<>> builder a
 
-instance Encodable DataUpdateMessage where
+instance Encodable (Path ar) => Encodable (DataUpdateMessage ar) where
     builder = tdTaggedBuilder dumtTaggedData dumtBuilder
     parser = tdTaggedParser dumtTaggedData dumtParser
 
-
-data ContainerUpdateMsgType
-  = CUMTPresentAfter
-  | CUMTAbsent
-  deriving (Enum, Bounded)
-
-cumtTaggedData :: TaggedData ContainerUpdateMsgType ContainerUpdateMessage
-cumtTaggedData = taggedData typeToTag msgToType
-  where
-    typeToTag CUMTPresentAfter = [btq|>|]
-    typeToTag CUMTAbsent = [btq|-|]
-    msgToType (MsgPresentAfter {}) = CUMTPresentAfter
-    msgToType (MsgAbsent {}) = CUMTAbsent
-
-cumtParser :: ContainerUpdateMsgType -> Parser ContainerUpdateMessage
-cumtParser e = case e of
-  CUMTPresentAfter ->
-    MsgPresentAfter <$> parser <*> parser <*> parser <*> parser
-  CUMTAbsent -> MsgAbsent <$> parser <*> parser <*> parser
-
-cumtBuilder :: MonadFail m => ContainerUpdateMessage -> m Builder
-cumtBuilder msg = case msg of
-  MsgPresentAfter p t r a ->
-    builder p <<>> builder t <<>> builder r <<>> builder a
-  MsgAbsent p t a ->
-    builder p <<>> builder t <<>> builder a
-
-instance Encodable ContainerUpdateMessage where
-    parser = tdTaggedParser cumtTaggedData cumtParser
-    builder = tdTaggedBuilder cumtTaggedData cumtBuilder
+instance Encodable (Path ar) => Encodable (ContainerUpdateMessage ar) where
+    parser =  MsgMoveAfter <$> parser <*> parser <*> parser <*> parser
+    builder (MsgMoveAfter p s targ att) =
+      builder p <<>> builder s <<>> builder targ <<>> builder att
 
 data TrBundleType
   = TrbtProvider | TrbtProviderRelinquish | TrbtClient deriving (Enum, Bounded)
@@ -216,19 +204,21 @@ trBundleTaggedData = taggedData typeToTag bundleToType
 
 instance Encodable ToRelayBundle where
     builder = tdTaggedBuilder trBundleTaggedData $ \bund -> case bund of
-      Trpb (ToRelayProviderBundle ns errs postDefs defs dat contMsgs) ->
+      Trpb (ToRelayProviderBundle ns errs postDefs defs dels dat contMsgs) ->
         builder ns <<>> builder errs <<>> builder postDefs <<>> builder defs
-        <<>> builder dat <<>> builder contMsgs
+        <<>> builder dels <<>> builder dat <<>> builder contMsgs
       Trpr (ToRelayProviderRelinquish ns) -> builder ns
-      Trcb (ToRelayClientBundle subs posts dat contMsgs) ->
-        builder subs <<>> builder posts <<>> builder dat <<>> builder contMsgs
+      Trcb (ToRelayClientBundle subs dels posts dat contMsgs) ->
+        builder subs <<>> builder dels <<>> builder posts <<>> builder dat
+        <<>> builder contMsgs
     parser = tdTaggedParser trBundleTaggedData $ \ty -> case ty of
       TrbtProvider -> Trpb <$>
         (ToRelayProviderBundle <$> parser <*> parser <*> parser <*> parser
-        <*> parser <*> parser)
+        <*> parser <*> parser <*> parser)
       TrbtProviderRelinquish -> Trpr . ToRelayProviderRelinquish <$> parser
       TrbtClient -> Trcb <$>
-        (ToRelayClientBundle <$> parser <*> parser <*> parser <*> parser)
+        (ToRelayClientBundle <$> parser <*> parser <*> parser <*> parser
+         <*> parser)
 
 data FrBundleType
   = FrbtProvider | FrbtProviderError | FrbtClient deriving (Enum, Bounded)
@@ -247,20 +237,23 @@ frBundleTaggedData = taggedData typeToTag bundleToType
 
 instance Encodable FromRelayBundle where
     builder = tdTaggedBuilder frBundleTaggedData $ \bund -> case bund of
-      Frpb (FromRelayProviderBundle ns posts dat contMsgs) ->
-        builder ns <<>> builder posts <<>> builder dat <<>> builder contMsgs
+      Frpb (FromRelayProviderBundle ns dels posts dat contMsgs) ->
+        builder ns <<>> builder dels <<>> builder posts <<>> builder dat
+        <<>> builder contMsgs
       Frpeb (FromRelayProviderErrorBundle errs) -> builder errs
       Frcb (
-          FromRelayClientBundle pTyUns tyUns datUns errs postDefs defs tas dat
-          contMsgs) ->
+          FromRelayClientBundle pTyUns tyUns datUns errs postDefs defs tas dels
+          dat contMsgs) ->
         builder pTyUns <<>> builder tyUns <<>> builder datUns
         <<>> builder errs <<>> builder postDefs <<>> builder defs
-        <<>> builder tas <<>> builder dat <<>> builder contMsgs
+        <<>> builder tas <<>> builder dels <<>> builder dat
+        <<>> builder contMsgs
     parser = tdTaggedParser frBundleTaggedData $ \ty -> case ty of
       FrbtProvider -> Frpb <$>
-        (FromRelayProviderBundle <$> parser <*> parser <*> parser <*> parser)
+        (FromRelayProviderBundle <$> parser <*> parser <*> parser <*> parser
+         <*> parser)
       FrbtProviderError ->
         Frpeb . FromRelayProviderErrorBundle <$> parser
       FrbtClient -> Frcb <$>
         (FromRelayClientBundle <$> parser <*> parser <*>  parser <*> parser
-        <*> parser <*> parser <*> parser <*> parser <*> parser)
+        <*> parser <*> parser <*> parser <*> parser <*> parser <*> parser)

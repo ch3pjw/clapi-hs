@@ -1,10 +1,8 @@
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
 {-# LANGUAGE
-    QuasiQuotes
-  , TemplateHaskell
+    TemplateHaskell
 #-}
 
-module Clapi.TH (segq, pathq, btq) where
+module Clapi.TH (segq, ap, rp, btq) where
 
 import Control.Monad ((>=>))
 import Data.Char (ord)
@@ -13,7 +11,7 @@ import Language.Haskell.TH.Lift (lift)
 import Language.Haskell.TH.Quote (QuasiQuoter(..))
 
 import Clapi.Types.Base (mkTag)
-import Clapi.Types.Path (fromText, mkSeg)
+import Clapi.Types.Path (absPathFromText, relPathFromText, mkSeg)
 
 segq :: QuasiQuoter
 segq = QuasiQuoter {
@@ -22,9 +20,18 @@ segq = QuasiQuoter {
     quoteDec = fail "Not supported",
     quoteType = fail "Not supported"}
 
-pathq :: QuasiQuoter
-pathq = QuasiQuoter {
-    quoteExp = fromText . pack >=> lift,
+-- | Path 'Abs quasiquoter
+ap :: QuasiQuoter
+ap = QuasiQuoter {
+    quoteExp = absPathFromText . pack >=> lift,
+    quotePat = fail "Not supported",
+    quoteDec = fail "Not supported",
+    quoteType = fail "Not supported"}
+
+-- | Path 'Rel quasiquoter
+rp :: QuasiQuoter
+rp = QuasiQuoter {
+    quoteExp = relPathFromText . pack >=> lift,
     quotePat = fail "Not supported",
     quoteDec = fail "Not supported",
     quoteType = fail "Not supported"}
