@@ -1,4 +1,8 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
+{-# LANGUAGE
+    FlexibleContexts
+  , UndecidableInstances
+#-}
 
 module SerialisationSpec where
 
@@ -25,11 +29,13 @@ import Clapi.Types
   , FromRelayProviderErrorBundle(..), ToRelayProviderRelinquish(..)
   , ToRelayBundle(..), FromRelayBundle(..)
   , ErrorIndex(..))
-import Clapi.Types.Path (Path(..), pattern Root)
+import Clapi.Types.Messages (EiAbsRel)
+import Clapi.Types.Path (Path(..))
 import Clapi.Serialisation (Encodable(..))
 
+import Arbitrary (smallListOf)
 -- Incl. Arbitrary instances of WireValue:
-import TypesSpec (smallListOf, arbitraryTextNoNull)
+import TypesSpec (arbitraryTextNoNull)
 
 encode :: (MonadFail m, Encodable a) => a -> m ByteString
 encode x = toByteString <$> builder x
@@ -62,14 +68,14 @@ instance Arbitrary SubMessage where
 instance Arbitrary TypeMessage where
   arbitrary = MsgAssignType <$> arbitrary <*> arbitrary <*> arbitrary
 
-instance Arbitrary (PostMessage ar) where
+instance Arbitrary (Path ar) => Arbitrary (PostMessage ar) where
   arbitrary = MsgPost <$> arbitrary <*> arbitrary <*>
     (Map.fromList <$> smallListOf arbitrary)
 
 genAttributee :: Gen (Maybe Attributee)
 genAttributee = oneof [return Nothing, Just <$> arbitraryTextNoNull]
 
-instance Arbitrary (DataUpdateMessage ar) where
+instance Arbitrary (Path ar) => Arbitrary (DataUpdateMessage ar) where
   arbitrary = oneof
     [ MsgConstSet
       <$> (arbitrary @(Path ar))
@@ -87,24 +93,25 @@ instance Arbitrary (DataUpdateMessage ar) where
       <*> (arbitrary @TpId)
       <*> genAttributee
     ]
-  shrink (MsgConstSet Root [] Nothing) = []
+  shrink (MsgConstSet _ [] Nothing) = []
   shrink (MsgConstSet p vs a) =
     [MsgConstSet p' vs' a' | (p', vs', a') <- shrink (p, vs, a)]
-  shrink (MsgSet (Path []) _ _ [] _ Nothing) = []
+  shrink (MsgSet _ _ _ [] _ Nothing) = []
   shrink (MsgSet p tpid t vs i a) =
     [MsgSet p' tpid t vs' i a' | (p', vs', a') <- shrink (p, vs, a)]
-  shrink (MsgRemove (Path []) _ Nothing) = []
+  shrink (MsgRemove _ _ Nothing) = []
   shrink (MsgRemove p t a) = [MsgRemove p' t a' | (p', a') <- shrink (p, a)]
 
 
-instance Arbitrary (ContainerUpdateMessage ar) where
+instance Arbitrary (Path ar) => Arbitrary (ContainerUpdateMessage ar) where
   arbitrary = MsgMoveAfter <$> arbitrary <*> arbitrary <*> arbitrary
     <*> genAttributee
 
-instance Arbitrary (DeleteMessage ar) where
+instance Arbitrary (Path ar) => Arbitrary (DeleteMessage ar) where
   arbitrary = MsgDelete <$> arbitrary <*> arbitrary
 
-instance Arbitrary a => Arbitrary (ErrorIndex a) where
+instance (Arbitrary a, Arbitrary (Path (EiAbsRel a)))
+    => Arbitrary (ErrorIndex a) where
   arbitrary = oneof
     [ return GlobalError
     , PathError <$> arbitrary
@@ -113,7 +120,8 @@ instance Arbitrary a => Arbitrary (ErrorIndex a) where
     , TypeError <$> arbitrary
     ]
 
-instance Arbitrary a => Arbitrary (MsgError a) where
+instance (Arbitrary a, Arbitrary (Path (EiAbsRel a)))
+    => Arbitrary (MsgError a) where
   arbitrary = MsgError <$> arbitrary <*> arbitraryTextNoNull
 
 

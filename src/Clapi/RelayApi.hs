@@ -22,13 +22,13 @@ import Clapi.Types.Digests
   (DefOp(OpDefine), DataChange(..), FrcDigest(..), DataDigest)
 import Clapi.Types.Path
   ( Seg, typeName, tTypeName, pattern Root, pattern (:/), Namespace(..)
-  , AbsRel(..), mkAbsPath)
+  , AbsRel(..), mkAbsPath, AbsRelPath(..))
 import Clapi.Types.Path (Path)
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Tree (TreeType(..), unbounded)
 import Clapi.Types.Wire (castWireValue)
 import Clapi.Protocol (Protocol, waitThen, sendFwd, sendRev)
-import Clapi.TH (pathq, segq)
+import Clapi.TH (ap, rp, segq)
 import Clapi.TimeDelta (tdZero, getDelta, TimeDelta(..))
 import Clapi.Valuespace (apiNs, dnSeg)
 
@@ -86,8 +86,8 @@ relayApiProto selfAddr =
         ])
       mempty
       (alFromList
-        [ ([pathq|/build|], ConstChange Nothing [WireValue @Text "banana"])
-        , ([pathq|/self|], ConstChange Nothing [
+        [ ([rp|./build|], ConstChange Nothing [WireValue @Text "banana"])
+        , ([rp|./self|], ConstChange Nothing [
              WireValue $ Path.toText $ mkAbsPath rns selfClientPath])
         , ( selfClientPath :/ clock_diff
           , ConstChange Nothing [WireValue @Float 0.0])
@@ -99,7 +99,7 @@ relayApiProto selfAddr =
     rns = Namespace [segq|relay|]
     clock_diff = [segq|clock_diff|]
     selfSeg = pathNameFor selfAddr
-    selfClientPath = Root :/ [segq|clients|] :/ selfSeg
+    selfClientPath = emptyPath :/ [segq|clients|] :/ selfSeg
     staticAl = alFromMap . Map.fromList
     steadyState
       :: Map Seg TimeDelta -> Map Namespace Seg -> Protocol
@@ -118,9 +118,9 @@ relayApiProto selfAddr =
             in do
               sendFwd (ClientConnect displayName cAddr)
               pubUpdate (alFromList
-                [ ( [pathq|/clients|] :/ cSeg :/ clock_diff
+                [ ( [rp|./clients|] :/ cSeg :/ clock_diff
                   , ConstChange Nothing [WireValue $ unTimeDelta tdZero])
-                , ( [pathq|/clients|] :/ cSeg :/ dnSeg
+                , ( [rp|./clients|] :/ cSeg :/ dnSeg
                   , ConstChange Nothing [WireValue $ Text.pack displayName])
                 ])
                 mempty
@@ -131,7 +131,7 @@ relayApiProto selfAddr =
             -- pipeline, it'd be less jittery and tidy this up
             delta <- lift $ getDelta theirTime
             let timingMap' = Map.insert cSeg delta timingMap
-            pubUpdate (alSingleton ([pathq|/clients|] :/ cSeg :/ clock_diff)
+            pubUpdate (alSingleton ([rp|./clients|] :/ cSeg :/ clock_diff)
               $ ConstChange Nothing [WireValue $ unTimeDelta delta])
               mempty
             sendFwd $ ClientData cAddr d
@@ -146,7 +146,7 @@ relayApiProto selfAddr =
             ownerMap' = Map.filter (/= cSeg) ownerMap
             (dd, dels) = ownerChangeInfo ownerMap'
           in do
-            pubUpdate dd $ Map.insert ([pathq|/clients|] :/ cSeg) Nothing dels
+            pubUpdate dd $ Map.insert ([rp|./clients|] :/ cSeg) Nothing dels
             steadyState timingMap' ownerMap'
         pubUpdate dd dels = sendFwd $ ClientData selfAddr $ Trpd $ TrpDigest
           rns mempty mempty dels dd mempty mempty
@@ -177,11 +177,11 @@ relayApiProto selfAddr =
           -> (DataDigest 'Rel, Map (Path 'Rel) (Maybe Attributee))
         ownerChangeInfo ownerMap' =
             ( alFromMap $ Map.mapKeys toOwnerPath $ toSetRefOp <$> ownerMap'
-            , Map.mapKeys (([pathq|/owners|] :/) . unNamespace) $
+            , Map.mapKeys (([rp|./owners|] :/) . unNamespace) $
                 const Nothing <$>
                 ownerMap `Map.difference` ownerMap')
         toOwnerPath :: Namespace -> Path 'Rel
-        toOwnerPath s = [pathq|/owners|] :/ unNamespace s
+        toOwnerPath s = [rp|./owners|] :/ unNamespace s
         toSetRefOp ns = ConstChange Nothing [
           WireValue $ Path.toText $ Root :/ selfSeg :/ [segq|clients|] :/ ns]
         viewAs i dd =
@@ -195,8 +195,8 @@ relayApiProto selfAddr =
               $ castWireValue wv
             alterTime _ = error "Weird data back out of VS"
             fiddleDataChanges p dc
-              | p `Path.isChildOf` [pathq|/relay/clients|] = alterTime dc
-              | p == [pathq|/relay/self|] = toSetRefOp theirSeg
+              | p `Path.isChildOf` [ap|/relay/clients|] = alterTime dc
+              | p == [ap|/relay/self|] = toSetRefOp theirSeg
               | otherwise = dc
           in
             alFmapWithKey fiddleDataChanges dd

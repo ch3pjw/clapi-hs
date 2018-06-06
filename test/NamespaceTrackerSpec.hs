@@ -31,7 +31,7 @@ import Clapi.Types.Digests
   , SubOp(..), DefOp(..))
 import Clapi.Types.Path
   ( Path, Seg, pattern Root, pattern (:/), TypeName, typeName, tTypeName
-  , Namespace(..), AbsRel(..))
+  , Namespace(..), AbsRel(..), AbsRelPath(..))
 import Clapi.Types.AssocList (alSingleton, alEmpty, alFromList)
 import Clapi.PerClientProto (ClientEvent(..), ServerEvent(..))
 import Clapi.NamespaceTracker (nstProtocol, Originator(..))
@@ -50,7 +50,7 @@ helloS :: Seg
 helloS = [segq|hello|]
 
 helloP :: Path 'Abs
-helloP = [pathq|/hello|]
+helloP = [ap|/hello|]
 
 ocdEmpty :: OutboundClientDigest
 ocdEmpty = outboundClientDigest
@@ -93,7 +93,7 @@ spec = do
       let
         subDs =
           [ trcdEmpty
-              {trcdDataSubs = Map.singleton [pathq|/hello|] OpSubscribe}
+              {trcdDataSubs = Map.singleton [ap|/hello|] OpSubscribe}
           , trcdEmpty
               {trcdTypeSubs = Map.singleton
                 (tTypeName (Namespace helloS) helloS) OpSubscribe}
@@ -141,7 +141,7 @@ spec = do
             sendRev (i, Ocd $ ocdEmpty
               { ocdData = alFromList
                 [ (helloP, textChange "t")
-                , ([pathq|/nowhere|], textChange "banana")
+                , ([ap|/nowhere|], textChange "banana")
                 ]
               })
             sendRev (i, Ocd $ ocdEmpty
@@ -168,7 +168,7 @@ spec = do
     it "Disowns on owner disconnect" $
       -- And unsubs clients
       let
-        byeP = [pathq|/bye|]
+        byeP = [ap|/bye|]
         forTest = do
             sendFwd $ ClientData bob $ Trcd $ trcdEmpty
               {trcdDataSubs = Map.fromList
@@ -231,7 +231,7 @@ spec = do
               ] -- FIXME: should API be owned?
             expectRev $ Right $ ServerData alice $
               Frpd (frpDigest $ Namespace helloS)
-              { frpdData = alSingleton Root $ textChange "x"
+              { frpdData = alSingleton emptyPath $ textChange "x"
               }
         fauxRelay = do
             waitThenFwdOnly $
@@ -290,7 +290,7 @@ spec = do
         expectRev . Right . ServerData addr . Frped . FrpErrorDigest
     claimHello addr = sendFwd $ ClientData addr $ Trpd $
       (trpDigest $ Namespace helloS)
-      {trpdData = alSingleton Root $ textChange "yo"}
+      {trpdData = alSingleton emptyPath $ textChange "yo"}
     subHello addr = sendFwd $ ClientData addr $ Trcd $ trcdEmpty
       {trcdDataSubs = Map.singleton helloP OpSubscribe}
     textChange s = ConstChange Nothing [WireValue (s :: T.Text)]

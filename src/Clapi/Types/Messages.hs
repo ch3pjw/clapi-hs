@@ -21,14 +21,14 @@ import Clapi.Types.Wire (WireValue)
 -- FIXME: redefinition
 type TpId = Word32
 
-type family Munge a :: AbsRel
-type instance Munge Seg = 'Rel
-type instance Munge TypeName = 'Abs
+type family EiAbsRel a :: AbsRel
+type instance EiAbsRel Seg = 'Rel
+type instance EiAbsRel TypeName = 'Abs
 
 data ErrorIndex a
   = GlobalError
-  | PathError (Path (Munge a))
-  | TimePointError (Path (Munge a)) TpId
+  | PathError (Path (EiAbsRel a))
+  | TimePointError (Path (EiAbsRel a)) TpId
   | PostTypeError (Tagged PostDefinition a)
   | TypeError (Tagged Definition a)
   deriving (Show, Eq, Ord)

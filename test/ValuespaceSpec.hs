@@ -29,7 +29,7 @@ import Clapi.Types
 import qualified Clapi.Types.Path as Path
 import Clapi.Types.Path
   ( Path(..), pattern (:/), pattern Root, Seg, TypeName, typeName, tTypeName
-  , Namespace(..), AbsRel(..))
+  , Namespace(..), AbsRel(..), AbsRelPath(..))
 import Clapi.Valuespace
   ( Valuespace(..), validateVs, baseValuespace, processToRelayProviderDigest
   , processToRelayClientDigest, apiNs, vsRelinquish, ValidationErr(..))
@@ -58,7 +58,7 @@ validVersionTypeChange vs =
       [ (Tagged [segq|stringVersion|], OpDefine svd)
       , (Tagged $ unNamespace apiNs, OpDefine rootDef)
       ]
-    , trpdData = alSingleton [pathq|/version|] $
+    , trpdData = alSingleton [rp|./version|] $
       ConstChange Nothing [WireValue ("pear" :: Text)]
     }
 
@@ -85,7 +85,7 @@ extendedVs def s dc =
       { trpdDefinitions = Map.fromList
         [ (Tagged s, OpDefine def)
         , (Tagged $ unNamespace apiNs, OpDefine rootDef)]
-      , trpdData = alSingleton (Root :/ s) dc
+      , trpdData = alSingleton (emptyPath :/ s) dc
       }
   in vsAppliesCleanly d baseValuespace
 
@@ -97,7 +97,7 @@ vsWithXRef =
       (alSingleton [segq|daRef|] $ TtRef $
         typeName (Namespace [segq|api|]) [segq|version|])
       ILUninterpolated
-    newVal = ConstChange Nothing [WireValue $ Path.toText [pathq|/api/version|]]
+    newVal = ConstChange Nothing [WireValue $ Path.toText [ap|/api/version|]]
   in extendedVs newNodeDef refSeg newVal
 
 refSeg :: Seg
@@ -129,10 +129,10 @@ spec = do
     it "rechecks on data changes" $
       let
         d = (trpDigest apiNs)
-          { trpdData = alSingleton [pathq|/version|] $
+          { trpdData = alSingleton [rp|./version|] $
             ConstChange Nothing [WireValue @Text "wrong"]
           }
-      in vsProviderErrorsOn baseValuespace d [[pathq|/api/version|]]
+      in vsProviderErrorsOn baseValuespace d [[ap|/api/version|]]
     it "rechecks on type def changes" $
       -- Make sure changing (api, version) goes and checks things defined
       -- to have that type:
@@ -145,15 +145,15 @@ spec = do
             { trpdDefinitions = Map.singleton (Tagged [segq|version|]) $
               OpDefine newDef
             }
-      in vsProviderErrorsOn baseValuespace d [[pathq|/api/version|]]
+      in vsProviderErrorsOn baseValuespace d [[ap|/api/version|]]
     it "rechecks on container ops" $
       let
         d = (trpDigest apiNs)
-          { trpdDeletes = Map.singleton (Root :/ [segq|version|]) Nothing }
-      in vsProviderErrorsOn baseValuespace d [[pathq|/api|]]
+          { trpdDeletes = Map.singleton (emptyPath :/ [segq|version|]) Nothing }
+      in vsProviderErrorsOn baseValuespace d [[ap|/api|]]
     it "should only re-validate data that has been marked as invalid" $
       let
-        p = [pathq|/api/version|]
+        p = [ap|/api/version|]
         badVs = baseValuespace {
           vsTree = snd $ updateTreeWithDigest mempty
             (alSingleton p $ ConstChange Nothing []) $
@@ -178,7 +178,7 @@ spec = do
     it "xref old references do not error" $
       let
         v2s = [segq|v2|]
-        v2Val = alSingleton (Root :/ v2s) $ ConstChange Nothing
+        v2Val = alSingleton (emptyPath :/ v2s) $ ConstChange Nothing
           [WireValue @Word32 1, WireValue @Word32 2, WireValue @Int32 3]
       in do
         vs <- vsWithXRef
@@ -193,8 +193,8 @@ spec = do
           vs
         -- Update the ref to point at new version:
         vs'' <- vsAppliesCleanly (trpDigest apiNs)
-          { trpdData = alSingleton (Root :/ refSeg) $
-            ConstChange Nothing [WireValue $ Path.toText [pathq|/api/v2|]]
+          { trpdData = alSingleton (emptyPath :/ refSeg) $
+            ConstChange Nothing [WireValue $ Path.toText [ap|/api/v2|]]
           }
           vs'
         (vsAppliesCleanly (validVersionTypeChange vs'') vs''
@@ -203,19 +203,19 @@ spec = do
       let
         ars = [segq|arr|]
         badChild = (trpDigest apiNs)
-          { trpdData = alSingleton [pathq|/arr/bad|] $
+          { trpdData = alSingleton [rp|./arr/bad|] $
             ConstChange Nothing [WireValue @Text "boo"]
           }
         goodChild = (trpDigest apiNs)
-          { trpdData = alSingleton [pathq|/arr/mehearties|] $
+          { trpdData = alSingleton [rp|./arr/mehearties|] $
             ConstChange Nothing
             [WireValue @Word32 3, WireValue @Word32 4, WireValue @Int32 3]
           }
         removeGoodChild = (trpDigest apiNs)
-          {trpdDeletes = Map.singleton [pathq|/arr/mehearties|] Nothing}
+          {trpdDeletes = Map.singleton [rp|./arr/mehearties|] Nothing}
       in do
         vs <- vsAppliesCleanly (emptyArrayD ars baseValuespace) baseValuespace
-        vsProviderErrorsOn vs badChild [[pathq|/api/arr/bad|]]
+        vsProviderErrorsOn vs badChild [[ap|/api/arr/bad|]]
         vs' <- vsAppliesCleanly goodChild vs
         vs'' <- vsAppliesCleanly removeGoodChild vs'
         vs'' `shouldBe` vs
@@ -227,7 +227,7 @@ spec = do
         missingChild = (trpDigest apiNs)
           { trpdDefinitions = Map.singleton (Tagged $ unNamespace apiNs) $
                 OpDefine rootDef}
-      in vsProviderErrorsOn baseValuespace missingChild [[pathq|/api|]]
+      in vsProviderErrorsOn baseValuespace missingChild [[ap|/api|]]
     it "Relinquish" $
       let
         fs = [segq|foo|]
@@ -241,7 +241,7 @@ spec = do
     describe "Client" $
         it "Can create new array entries" $
           let
-            dd = alSingleton [pathq|/api/arr/a|] $ ConstChange Nothing
+            dd = alSingleton [ap|/api/arr/a|] $ ConstChange Nothing
                 [WireValue @Word32 1, WireValue @Word32 2, WireValue @Int32 3]
           in do
             vs <- vsAppliesCleanly (emptyArrayD [segq|arr|] baseValuespace) baseValuespace

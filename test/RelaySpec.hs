@@ -23,7 +23,8 @@ import Clapi.Types.Digests
   , OutboundClientDigest(..), outboundClientDigest, TrprDigest(..))
 import Clapi.Types.Messages (ErrorIndex(..))
 import Clapi.Types.Path
-  (pattern Root, tTypeName, pattern (:/), Namespace(..), mkAbsPath)
+  ( Path(..), tTypeName, pattern (:/), Namespace(..), mkAbsPath
+  , AbsRelPath(..))
 import Clapi.Types.Tree (TreeType(..), unbounded)
 import Clapi.Types.Wire (WireValue(..))
 import Clapi.Valuespace
@@ -36,7 +37,7 @@ spec = describe "the relay protocol" $ do
       let
         fooDef = tupleDef "Some Word32"
           (alSingleton [segq|value|] (TtWord32 unbounded)) ILUninterpolated
-        dd = alSingleton Root $ ConstChange bob [WireValue (42 :: Word32)]
+        dd = alSingleton emptyPath $ ConstChange bob [WireValue (42 :: Word32)]
         inDig = Ipd $ (trpDigest $ Namespace foo)
           { trpdDefinitions = Map.singleton (Tagged foo) $ OpDefine fooDef
           , trpdData = dd
@@ -52,7 +53,7 @@ spec = describe "the relay protocol" $ do
             , (tTypeName apiNs [segq|root|], OpDefine extendedRootDef)
             ]
           , ocdTypeAssignments = Map.insert
-            [pathq|/foo|] (tTypeName (Namespace foo) foo, ReadOnly) mempty
+            [ap|/foo|] (tTypeName (Namespace foo) foo, ReadOnly) mempty
           , ocdContainerOps = Map.singleton Root $
               Map.singleton foo (Nothing, Just $ unNamespace apiNs)
           }
@@ -84,7 +85,7 @@ spec = describe "the relay protocol" $ do
       in runEffect $ test <<-> relay vsWithStuff
     it "should reject subscriptions to non-existant paths" $
       let
-        p = [pathq|/madeup|]
+        p = [ap|/madeup|]
         expectedOutDig = Ocid $ outboundClientDigest
           { ocdErrors = Map.singleton (PathError p) ["Path not found"]
           }
@@ -107,7 +108,7 @@ spec = describe "the relay protocol" $ do
           , vsTyDefs = Map.insert (Namespace foo) tyDefs $
                vsTyDefs baseValuespace
           }
-        dd = alSingleton (Root :/ kid) $ ConstChange Nothing []
+        dd = alSingleton (emptyPath :/ kid) $ ConstChange Nothing []
         inDig = Ipd $ (trpDigest $ Namespace foo)
           { trpdData = dd
           }
@@ -134,7 +135,7 @@ spec = describe "the relay protocol" $ do
                 (alSingleton foo $ TtWord32 unbounded) ILUninterpolated) $
               vsTyDefs baseValuespace
           }
-        dd = alSingleton Root $ ConstChange bob [WireValue (4 :: Word32)]
+        dd = alSingleton emptyPath $ ConstChange bob [WireValue (4 :: Word32)]
         test = do
             sendFwd ((), Ipd $ (trpDigest $ Namespace foo) {trpdData = dd})
             waitThenRevOnly $
@@ -148,7 +149,7 @@ spec = describe "the relay protocol" $ do
             sendFwd (1, Icd $ InboundClientDigest mempty mempty mempty mempty
                       mempty alEmpty)
             sendFwd (2, Icd $ InboundClientDigest
-                      (Set.singleton [pathq|/whatevz|]) mempty mempty mempty
+                      (Set.singleton [ap|/whatevz|]) mempty mempty mempty
                       mempty alEmpty)
             waitThenRevOnly $ lift . (`shouldSatisfy` (== (2 :: Int)) . fst)
       in runEffect $ test <<-> relay baseValuespace

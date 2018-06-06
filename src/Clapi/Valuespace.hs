@@ -1,6 +1,7 @@
 {-# LANGUAGE
     DataKinds
   , FlexibleContexts
+  , GADTs
 #-}
 
 module Clapi.Valuespace

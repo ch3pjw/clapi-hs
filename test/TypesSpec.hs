@@ -16,9 +16,8 @@ import Test.QuickCheck
 
 import System.Random (Random)
 import Data.Maybe (fromJust)
-import Control.Monad (replicateM, liftM2)
+import Control.Monad (liftM2)
 import Control.Monad.Fail (MonadFail)
-import Data.List (inits)
 import Data.Proxy
 import Data.Tagged (Tagged(..))
 import Data.Text (Text)
@@ -35,31 +34,11 @@ import Clapi.Types
 import Clapi.Util (proxyF, proxyF3)
 
 import Clapi.Types.Tree (TreeType(..), Bounds, bounds, ttEnum)
-import Clapi.Types.Path (Seg, Path(..), mkSeg, Qualified(..), Namespace(..))
+import Clapi.Types.Path (Qualified(..),)
 import Clapi.Types.WireTH (mkWithWtProxy)
 
-smallListOf :: Gen a -> Gen [a]
-smallListOf g = do
-  l <- choose (0, 5)
-  replicateM l g
-
-smallListOf1 :: Gen a -> Gen [a]
-smallListOf1 g = do
-  l <- choose (1, 5)
-  replicateM l g
-
-maybeOf :: Gen a -> Gen (Maybe a)
-maybeOf g = oneof [return Nothing, Just <$> g]
-
-name :: Gen Seg
-name = fromJust . mkSeg . Text.pack <$> smallListOf1 (elements ['a'..'z'])
-
-instance Arbitrary Seg where
-  arbitrary = name
-
-instance Arbitrary (Path ar) where
-  arbitrary = Path <$> smallListOf name
-  shrink (Path names) = fmap Path . drop 1 . reverse . inits $ names
+import Arbitrary (smallListOf)
+import PathSpec ()
 
 instance Arbitrary a => Arbitrary (Qualified a) where
   arbitrary = Qualified <$> arbitrary <*> arbitrary
@@ -211,4 +190,3 @@ instance Arbitrary TreeType where
 data TestEnum = TestOne | TestTwo | TestThree deriving (Show, Eq, Ord, Enum, Bounded)
 
 deriving instance Arbitrary a => Arbitrary (Tagged t a)
-deriving instance Arbitrary Namespace

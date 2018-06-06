@@ -1,7 +1,9 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# LANGUAGE
     TypeSynonymInstances
+  , FlexibleContexts
   , FlexibleInstances
+  , UndecidableInstances
 #-}
 
 module Clapi.Serialisation.Messages where
@@ -19,6 +21,7 @@ import Clapi.Serialisation.Definitions ()
 import Clapi.Serialisation.Path ()
 import Clapi.TH (btq)
 import Clapi.Types.Messages
+import Clapi.Types.Path (Path)
 import Clapi.TaggedData (TaggedData, taggedData)
 import Clapi.Serialisation.Wire ()
 
@@ -46,7 +49,8 @@ errIdxTaggedData = taggedData typeToTag eiToType
       PostTypeError _ -> EitPostTypeName
       TypeError _ -> EitTypeName
 
-instance Encodable a => Encodable (ErrorIndex a) where
+instance (Encodable a, Encodable (Path (EiAbsRel a)))
+    => Encodable (ErrorIndex a) where
   builder = tdTaggedBuilder errIdxTaggedData $ \ei -> case ei of
     GlobalError -> return mempty
     PathError p -> builder p
@@ -61,9 +65,10 @@ instance Encodable a => Encodable (ErrorIndex a) where
     EitTypeName -> TypeError <$> parser
 
 
-instance Encodable a => Encodable (MsgError a) where
-    builder (MsgError ei s) = builder ei <<>> builder s
-    parser = MsgError <$> parser <*> parser
+instance (Encodable a, Encodable (Path (EiAbsRel a)))
+    => Encodable (MsgError a) where
+  builder (MsgError ei s) = builder ei <<>> builder s
+  parser = MsgError <$> parser <*> parser
 
 data DefMsgType = DefMsgTDef | DefMsgTUndef deriving (Enum, Bounded)
 
@@ -131,11 +136,11 @@ instance Encodable TypeMessage where
     builder (MsgAssignType p tn l) = builder p <<>> builder tn <<>> builder l
     parser = MsgAssignType <$> parser <*> parser <*> parser
 
-instance Encodable (PostMessage ar) where
+instance Encodable (Path ar) => Encodable (PostMessage ar) where
     builder (MsgPost p ph args) = builder p <<>> builder ph <<>> builder args
     parser = MsgPost <$> parser <*> parser <*> parser
 
-instance Encodable (DeleteMessage ar) where
+instance Encodable (Path ar) => Encodable (DeleteMessage ar) where
     builder (MsgDelete p att) = builder p <<>> builder att
     parser = MsgDelete <$> parser <*> parser
 
@@ -155,13 +160,16 @@ dumtTaggedData = taggedData typeToTag msgToType
     msgToType (MsgSet {}) = DUMTSet
     msgToType (MsgRemove {}) = DUMTRemove
 
-dumtParser :: DataUpdateMsgType -> Parser (DataUpdateMessage ar)
+dumtParser
+  :: Encodable (Path ar) => DataUpdateMsgType -> Parser (DataUpdateMessage ar)
 dumtParser e = case e of
     DUMTConstSet -> MsgConstSet <$> parser <*> parser <*> parser
-    DUMTSet -> MsgSet <$> parser <*> parser <*> parser <*> parser <*> parser <*> parser
+    DUMTSet -> MsgSet <$> parser <*> parser <*> parser <*> parser <*> parser
+      <*> parser
     DUMTRemove -> MsgRemove <$> parser <*> parser <*> parser
 
-dumtBuilder :: MonadFail m => DataUpdateMessage ar -> m Builder
+dumtBuilder
+  :: (Encodable (Path ar), MonadFail m) => DataUpdateMessage ar -> m Builder
 dumtBuilder m = case m of
     MsgConstSet p v a -> builder p <<>> builder v <<>> builder a
     MsgSet p ptId t v i a ->
@@ -170,11 +178,11 @@ dumtBuilder m = case m of
     MsgRemove p t a ->
       builder p <<>> builder t <<>> builder a
 
-instance Encodable (DataUpdateMessage ar) where
+instance Encodable (Path ar) => Encodable (DataUpdateMessage ar) where
     builder = tdTaggedBuilder dumtTaggedData dumtBuilder
     parser = tdTaggedParser dumtTaggedData dumtParser
 
-instance Encodable (ContainerUpdateMessage ar) where
+instance Encodable (Path ar) => Encodable (ContainerUpdateMessage ar) where
     parser =  MsgMoveAfter <$> parser <*> parser <*> parser <*> parser
     builder (MsgMoveAfter p s targ att) =
       builder p <<>> builder s <<>> builder targ <<>> builder att

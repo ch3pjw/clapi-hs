@@ -1,22 +1,30 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# LANGUAGE
-    GeneralizedNewtypeDeriving
+    DataKinds
+  , FlexibleInstances
+  , GeneralizedNewtypeDeriving
   , StandaloneDeriving
 #-}
 
 module Clapi.Serialisation.Path where
 
 import Clapi.Serialisation.Base (Encodable(..), (<<>>))
-import Clapi.Types.Path (Qualified(..), Seg, mkSeg, unSeg, Namespace(..))
+import Clapi.Types.Path
+  ( Qualified(..), Seg, mkSeg, unSeg, Namespace(..), AbsRel(..)
+  , absPathFromText, relPathFromText)
 import qualified Clapi.Types.Path as Path
 
 instance Encodable Seg where
   builder = builder . unSeg
   parser = parser >>= mkSeg
 
-instance Encodable (Path.Path a) where
+instance Encodable (Path.Path 'Abs) where
   builder = builder . Path.toText
-  parser = parser >>= Path.fromText
+  parser = parser >>= absPathFromText
+
+instance Encodable (Path.Path 'Rel) where
+  builder = builder . Path.toText
+  parser = parser >>= relPathFromText
 
 deriving instance Encodable Namespace
 

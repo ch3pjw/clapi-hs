@@ -1,21 +1,29 @@
 {-# LANGUAGE
     DataKinds
   , DeriveLift
+  , GADTs
+  , LambdaCase
   , KindSignatures
+  , PolyKinds
+  , StandaloneDeriving
 #-}
 
 module Clapi.Types.Path (
     Path(..), AbsRel(..), Seg, mkSeg, unSeg, joinSegs,
-    mkAbsPath,
-    pathP, segP, toText, fromText,
+    mkAbsPath, AbsRelPath(..),
+    absPathP, relPathP, segP, toText, absPathFromText, relPathFromText,
     splitHead, splitTail, parentPath,
-    pattern Root, pattern (:/), -- pattern (:</),
-    isParentOf, isChildOf, isParentOfAny, isChildOfAny, childPaths,
+    pattern (:/),
+    isParentOf, isChildOf, isParentOfAny, isChildOfAny,
     Namespace(..), Qualified(..),
     TypeName, typeName, tTypeName, tTnNamespace, tTnName, qualify, unqualify,
     ) where
 
 import Prelude hiding (fail)
+
+import Control.Applicative ((<|>))
+import Control.Monad (void)
+import Control.Monad.Fail (MonadFail, fail)
 import qualified Data.Attoparsec.Text as DAT
 import Data.Attoparsec.Text (Parser)
 import Data.Char (isLetter, isDigit)
@@ -24,7 +32,6 @@ import Data.Monoid
 import Data.Tagged (Tagged(..))
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Control.Monad.Fail (MonadFail, fail)
 import Instances.TH.Lift ()
 import Language.Haskell.TH.Lift (Lift)
 
@@ -46,12 +53,22 @@ mkSeg = either fail return . DAT.parseOnly (segP <* DAT.endOfInput)
 joinSegs :: [Seg] -> Seg
 joinSegs = Seg . Text.intercalate (Text.singleton '_') . fmap unSeg
 
+newtype Namespace
+  = Namespace {unNamespace :: Seg} deriving (Show, Eq, Ord, Lift)
+
 data AbsRel = Abs | Rel
 
-newtype Path (a :: AbsRel) = Path {unPath :: [Seg]} deriving (Eq, Ord, Lift)
+data Path (a :: AbsRel) where
+  Root :: Path 'Abs
+  AbsPath :: Namespace -> [Seg] -> Path 'Abs
+  RelPath :: [Seg] -> Path 'Rel
+
+deriving instance Eq (Path a)
+deriving instance Ord (Path a)
+deriving instance Lift (Path a)
 
 mkAbsPath :: Namespace -> Path 'Rel -> Path 'Abs
-mkAbsPath ns (Path segs) = Path $ unNamespace ns : segs
+mkAbsPath ns (RelPath segs) = AbsPath ns segs
 
 -- -- You can't really write this, which is hmm...
 -- pathNs :: Path 'Abs -> Maybe (Namespace, Path 'Rel)
@@ -66,45 +83,81 @@ instance Show (Path a) where
     show = Text.unpack . toText
 
 toText :: Path a -> Text
-toText (Path segs) = sepText <> Text.intercalate sepText (fmap unSeg segs)
-
--- FIXME: not ROot because Rel is a thing...
-pattern Root :: Path a
-pattern Root = Path []
+toText Root = sepText
+toText (AbsPath ns segs) = sepText <>
+  Text.intercalate sepText (unSeg (unNamespace ns) : fmap unSeg segs)
+toText (RelPath segs) = Text.intercalate sepText ("." : fmap unSeg segs)
 
 splitHead :: Path a -> Maybe (Seg, Path 'Rel)
-splitHead (Path []) = Nothing
-splitHead (Path (seg:segs)) = Just (seg, Path segs)
-
--- pattern (:</) :: Seg -> Path -> Path
--- pattern seg :</ path <- (splitHead -> Just (seg, path)) where
---     seg :</ path = Path $ seg : unPath path
+splitHead Root = Nothing
+splitHead (AbsPath ns segs) = Just (unNamespace ns, RelPath segs)
+splitHead (RelPath []) = Nothing
+splitHead (RelPath (s:segs)) = Just (s, RelPath segs)
 
 splitTail :: Path a -> Maybe (Path a, Seg)
-splitTail (Path path) = case path of
-    (y : xs) -> (\(s, ps) -> Just (Path ps, s)) $ go y xs
-    [] -> Nothing
+splitTail Root = Nothing
+splitTail (AbsPath ns []) = Just (Root, unNamespace ns)
+splitTail (AbsPath ns segs) = (\(s, ss) -> (AbsPath ns ss, s)) <$> popLast segs
+splitTail (RelPath []) = Nothing
+splitTail (RelPath segs) = (\(s, ss) -> (RelPath ss, s)) <$> popLast segs
+
+popLast :: [a] -> Maybe (a, [a])
+popLast [] = Nothing
+popLast (x:xs) = Just $ go x xs
   where
-    go :: Seg -> [Seg] -> (Seg, [Seg])
-    go y xs = case xs of
-        [] -> (y, [])
-        (z : zs) -> (y :) <$> go z zs
+    go y [] = (y, [])
+    go y (z:zs) = (y:) <$> go z zs
 
 pattern (:/) :: Path a -> Seg -> Path a
 pattern path :/ seg <- (splitTail -> Just (path, seg)) where
-    path :/ seg = Path $ unPath path ++ [seg]
+  Root :/ seg = AbsPath (Namespace seg) []
+  (AbsPath ns segs) :/ seg = AbsPath ns (segs ++ [seg])
+  (RelPath segs) :/ seg = RelPath (segs ++ [seg])
 
-pathP :: Parser (Path a)
-pathP = let sepP = DAT.char sepChar in
-    fmap Path $ sepP >> segP `DAT.sepBy` sepP
 
--- FIXME: This should potentially be two different parsers one for Path Abs that
--- includes the leading slash and one for Path Rel that forbids it.
-fromText :: MonadFail m => Text -> m (Path a)
-fromText = either fail return . DAT.parseOnly (pathP <* DAT.endOfInput)
+sepP :: Parser ()
+sepP = void $ DAT.char sepChar
+
+absPathP :: Parser (Path 'Abs)
+absPathP = do
+  sepP
+  (AbsPath
+     <$> (Namespace <$> segP)
+     <*> ((sepP >> segP `DAT.sepBy` sepP) <|> return [])
+    ) <|> return Root
+
+relPathP :: Parser (Path 'Rel)
+relPathP = do
+  _ <- DAT.char '.'
+  RelPath <$> ((sepP >> segP `DAT.sepBy` sepP) <|> return [])
+
+doParse :: MonadFail m => Parser a -> Text -> m a
+doParse p = either fail return . DAT.parseOnly (p <* DAT.endOfInput)
+
+absPathFromText :: MonadFail m => Text -> m (Path 'Abs)
+absPathFromText = doParse absPathP
+
+relPathFromText :: MonadFail m => Text -> m (Path 'Rel)
+relPathFromText = doParse relPathP
+
+class AbsRelPath ar where
+  emptyPath :: Path ar
+  fromText :: MonadFail m => Text -> m (Path ar)
+
+instance AbsRelPath 'Abs where
+  emptyPath = Root
+  fromText = absPathFromText
+
+instance AbsRelPath 'Rel where
+  emptyPath = RelPath []
+  fromText = relPathFromText
 
 isParentOf :: Path a -> Path a -> Bool
-isParentOf (Path a) (Path b) = isPrefixOf a b
+isParentOf Root _ = True
+isParentOf (AbsPath _ _) Root = False
+isParentOf (AbsPath ns1 segs1) (AbsPath ns2 segs2) = ns1 == ns2 &&
+  segs1 `isPrefixOf` segs2
+isParentOf (RelPath segs1) (RelPath segs2) = segs1 `isPrefixOf` segs2
 
 isChildOf :: Path a -> Path a -> Bool
 isChildOf = flip isParentOf
@@ -114,11 +167,6 @@ isParentOfAny parent candidates = or $ isParentOf parent <$> candidates
 
 isChildOfAny :: (Functor f, Foldable f) => Path a -> f (Path a) -> Bool
 isChildOfAny candidateChild parents = or $ isChildOf candidateChild <$> parents
-
-childPaths :: Functor f => Path a -> f Seg -> f (Path a)
-childPaths (Path segs) ss = Path . (segs ++) . pure <$> ss
-
-newtype Namespace = Namespace {unNamespace :: Seg} deriving (Show, Eq, Ord)
 
 data Qualified a
   = Qualified

@@ -27,8 +27,8 @@ import Clapi.Types.AssocList
   , alKeys, alToMap, alPickFromMap)
 import Clapi.Types.Dkmap (Dkmap)
 import qualified Clapi.Types.Dkmap as Dkmap
-import Clapi.Types.Path (
-    Seg, Path, pattern Root, pattern (:/), AbsRel(..), splitHead)
+import Clapi.Types.Path
+  ( Seg, Path, pattern (:/), AbsRel(..), splitHead, AbsRelPath(..))
 import Clapi.Types.Digests
   ( DataDigest, ContainerOps, DataChange(..), TimeSeriesDataOp(..))
 import Clapi.Types.SequenceOps (reorderUniqList)
@@ -46,8 +46,8 @@ data RoseTree a
   | RtDataSeries (TimeSeries a)
   deriving (Show, Eq, Functor, Foldable)
 
-treeMissing :: RoseTree a -> [Path ar]
-treeMissing = inner Root
+treeMissing :: AbsRelPath ar => RoseTree a -> [Path ar]
+treeMissing = inner emptyPath
   where
     inner p RtEmpty = [p]
     inner p (RtContainer al) =
